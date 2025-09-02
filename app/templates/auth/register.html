@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}Benutzer anlegen{% endblock %}
+{% block content %}
+<h4 class="mb-3">Benutzer anlegen</h4>
+<form method="post" class="col-md-6">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="mb-3">
+    <label class="form-label">Benutzername (Pseudonym)</label>
+    <input name="username" class="form-control" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Passwort</label>
+    <input type="password" name="password" class="form-control" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Rolle</label>
+    <select class="form-select" name="role">
+      {% for r in allowed_roles %}
+        <option value="{{ r }}">
+          {% if r=='admin' %}Admin{% elif r=='teacher' %}Lehrer{% else %}Schüler{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+  <button class="btn btn-primary" type="submit">Anlegen</button>
+</form>
+{% endblock %}

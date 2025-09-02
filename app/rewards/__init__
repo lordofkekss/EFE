@@ -1,0 +1,4 @@
+from flask import Blueprint
+
+
+bp = Blueprint("rewards", __name__)

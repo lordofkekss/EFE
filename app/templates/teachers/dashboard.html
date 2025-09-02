@@ -1,0 +1,85 @@
+{% extends 'base.html' %}
+{% block title %}Lehrer – Dashboard{% endblock %}
+{% block content %}
+<div class="row g-3">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Neue Klasse</h5>
+                <form method="post" action="/t/class/create">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="mb-2">
+                        <label class="form-label">Name</label>
+                        <input class="form-control" name="name" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Stufe</label>
+                        <input class="form-control" name="grade_level">
+                    </div>
+                    <button class="btn btn-primary">Anlegen</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Reward anlegen</h5>
+                <form method="post" action="/rewards/catalog">
+                    <div class="mb-2">
+                        <label class="form-label">Key</label>
+                        <input class="form-control" name="key" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Titel</label>
+                        <input class="form-control" name="title" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Kosten (⭐)</label>
+                        <input type="number" class="form-control" name="cost" min="1" value="1" required>
+                    </div>
+                    <button class="btn btn-success">Speichern</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="col-md-6">
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Schüler anlegen</h5>
+      <form method="post" action="/auth/register">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="role" value="student">
+        <div class="mb-2">
+          <label class="form-label">Benutzername</label>
+          <input class="form-control" name="username" required>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Passwort</label>
+          <input class="form-control" type="password" name="password" required>
+        </div>
+        <button class="btn btn-success">Anlegen</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+
+<hr class="my-4"/>
+
+
+<h5>Deine Klassen</h5>
+<div class="row">
+    {% for c in classes %}
+    <div class="col-md-4">
+        <div class="card mb-3">
+            <div class="card-body">
+                <h6 class="card-title">{{ c.name }}</h6>
+                <p class="card-text"><strong>Beitrittscode:</strong> <code>{{ c.join_code }}</code></p>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

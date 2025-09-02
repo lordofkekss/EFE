@@ -1,0 +1,25 @@
+# Flask und Kernlibs
+Flask==3.0.3
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.7
+Flask-Login==0.6.3
+Flask-WTF==1.2.1
+email-validator==2.1.1
+WTForms==3.1.2
+
+
+# Sicherheit/Passwörter
+passlib[bcrypt]==1.7.4
+
+
+# Live
+Flask-SocketIO==5.3.6
+python-socketio==5.11.4
+python-engineio==4.9.1
+# Für Produktion optional
+eventlet==0.36.1
+
+
+# Sonstiges
+python-dotenv==1.0.1
+psycopg2-binary==2.9.9
