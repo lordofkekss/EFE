@@ -3,6 +3,7 @@ from flask_wtf.csrf import generate_csrf
 import os
 from .config import Config
 from .extensions import db, migrate, login_manager, csrf, socketio
+from .cli import register_cli
 
 
 def create_app():
@@ -12,6 +13,7 @@ def create_app():
     # Extensions
     db.init_app(app)
     migrate.init_app(app, db)
+    register_cli(app)
     login_manager.init_app(app)
     login_manager.login_view = "auth.login"
     login_manager.login_message_category = "warning"
