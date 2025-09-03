@@ -2,115 +2,115 @@
 {% block title %}Kurs{% endblock %}
 {% block content %}
 <h4 class="mb-3">Kurs</h4>
-<ul class="nav nav-tabs mb-3" role="tablist">
-  <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-sections" type="button" role="tab">Abschnitte</button></li>
-  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-exercises" type="button" role="tab">Übungen</button></li>
-  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-files" type="button" role="tab">Dateien</button></li>
-</ul>
 
-<div class="tab-content">
-  <div class="tab-pane fade show active" id="tab-sections" role="tabpanel">
-    {% if current_user.role in ['teacher','admin'] %}
-      <div class="alert alert-secondary">Tipp: Reihenfolge via Drag & Drop ändern.</div>
-    {% endif %}
-    <ul class="list-group" id="section-list">
-      {% for n in sections %}
-        <li class="list-group-item d-flex justify-content-between align-items-center" data-id="{{ n.id }}">
-          <div>
-            <strong>{{ n.title }}</strong>
-            {% if n.released_at %}
-              <span class="badge bg-success ms-2">freigegeben</span>
-            {% else %}
-              <span class="badge bg-secondary ms-2">gesperrt</span>
-            {% endif %}
-          </div>
-          <div class="btn-group">
-            {% if current_user.role in ['teacher','admin'] %}
-              <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/section/{{ n.id }}/edit">Bearbeiten</a>
-              <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/section/{{ n.id }}/pdf">PDF</a>
-              <form method="post" action="/courses/{{ course.id }}/content/{{ n.id }}/release" class="d-inline ms-1">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                {% if n.released_at %}
-                  <input type="hidden" name="action" value="unrelease">
-                  <button class="btn btn-sm btn-warning">Sperren</button>
-                {% else %}
-                  <input type="hidden" name="action" value="release">
-                  <button class="btn btn-sm btn-success">Freigeben</button>
-                {% endif %}
-              </form>
-            {% endif %}
-          </div>
-        </li>
-      {% else %}
-        <li class="list-group-item">Noch keine Abschnitte.</li>
-      {% endfor %}
-    </ul>
-  </div>
+{% if current_user.role in ['teacher','admin'] %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h6 class="card-title">Neues Element</h6>
+    <form method="post" action="/courses/{{ course.id }}/content/create" class="row g-2">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="col-3">
+        <select name="type" class="form-select" required>
+          <option value="section">Abschnitt</option>
+          <option value="exercise">Übung</option>
+        </select>
+      </div>
+      <div class="col-5"><input class="form-control" name="title" placeholder="Titel" required></div>
+      <div class="col-2"><input class="form-control" type="number" name="order_index" value=""></div>
+      <div class="col-2"><button class="btn btn-primary w-100">Anlegen</button></div>
+      <div class="col-12"><textarea class="form-control" name="body_md" rows="2" placeholder="Beschreibung (optional)"></textarea></div>
+    </form>
 
-  <div class="tab-pane fade" id="tab-exercises" role="tabpanel">
-    <ul class="list-group">
-      {% for n in exercises %}
-        <li class="list-group-item d-flex justify-content-between align-items-center">
-          <span>{{ n.title }}</span>
-          <div>
-            {% if current_user.role in ['teacher','admin'] %}
-              <form method="post" action="/courses/{{ course.id }}/content/{{ n.id }}/release" class="d-inline me-2">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                {% if n.released_at %}
-                  <input type="hidden" name="action" value="unrelease">
-                  <button class="btn btn-sm btn-warning">Sperren</button>
-                {% else %}
-                  <input type="hidden" name="action" value="release">
-                  <button class="btn btn-sm btn-success">Freigeben</button>
-                {% endif %}
-              </form>
-            {% endif %}
-            <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/exercise/{{ n.id }}">Öffnen</a>
-          </div>
-        </li>
-      {% else %}
-        <li class="list-group-item">Noch keine Übungen.</li>
-      {% endfor %}
-    </ul>
-  </div>
-
-  <div class="tab-pane fade" id="tab-files" role="tabpanel">
-    {% if current_user.role in ['teacher','admin'] %}
-      <form class="mb-3" method="post" action="/courses/{{ course.id }}/upload" enctype="multipart/form-data">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="input-group">
-          <input type="file" name="file" class="form-control" required>
-          <button class="btn btn-outline-primary">Hochladen</button>
-        </div>
-      </form>
-    {% endif %}
-    <ul class="list-group">
-      {% for d in docs %}
-        <li class="list-group-item"><a href="/courses/files/{{ d.path }}" target="_blank">{{ d.filename }}</a> <span class="text-muted small">({{ d.mime_type }})</span></li>
-      {% else %}
-        <li class="list-group-item">Noch keine Dateien.</li>
-      {% endfor %}
-    </ul>
+    <form method="post" action="/courses/{{ course.id }}/upload" enctype="multipart/form-data" class="mt-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="input-group">
+        <input type="file" name="file" class="form-control" required>
+        <button class="btn btn-outline-primary">Datei hochladen</button>
+      </div>
+    </form>
   </div>
 </div>
+{% endif %}
 
-<div class="mt-4">
-  <a class="btn btn-outline-primary" href="/courses/{{ course.id }}/live">Live-Modus starten</a>
+<ul class="list-group" id="mix-list">
+  {% for it in items %}
+    <li class="list-group-item d-flex justify-content-between align-items-center" data-type="{{ 'doc' if it.kind=='file' else 'node' }}" data-id="{{ it.id }}">
+      <div>
+        <span class="badge {{ 'bg-primary' if it.kind=='section' else ('bg-info' if it.kind=='exercise' else 'bg-secondary') }}">
+          {{ 'Abschnitt' if it.kind=='section' else ('Übung' if it.kind=='exercise' else 'Datei') }}
+        </span>
+        <span class="ms-2">{{ it.title }}</span>
+        {% if it.released %}<span class="badge bg-success ms-2">freigegeben</span>{% endif %}
+      </div>
+      <div class="btn-group">
+        {% if it.kind=='section' %}
+          <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/section/{{ it.id }}/view">Ansehen</a>
+          {% if current_user.role in ['teacher','admin'] %}
+            <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/section/{{ it.id }}/edit">Bearbeiten</a>
+            <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/section/{{ it.id }}/pdf">PDF</a>
+            <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline ms-1">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              {% if it.released %}<input type="hidden" name="action" value="unrelease"><button class="btn btn-sm btn-warning">Sperren</button>{% else %}<input type="hidden" name="action" value="release"><button class="btn btn-sm btn-success">Freigeben</button>{% endif %}
+            </form>
+          {% endif %}
+        {% elif it.kind=='exercise' %}
+          <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/exercise/{{ it.id }}">Öffnen</a>
+          {% if current_user.role in ['teacher','admin'] %}
+            <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline ms-1">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              {% if it.released %}<input type="hidden" name="action" value="unrelease"><button class="btn btn-sm btn-warning">Sperren</button>{% else %}<input type="hidden" name="action" value="release"><button class="btn btn-sm btn-success">Freigeben</button>{% endif %}
+            </form>
+          {% endif %}
+        {% else %}
+          <a class="btn btn-sm btn-outline-primary" target="_blank" href="/courses/files/{{ doc_paths[it.id] }}">Download</a>
+        {% endif %}
+      </div>
+    </li>
+  {% endfor %}
+</ul>
+
+<div class="mt-4 d-flex gap-2">
+  {% if current_user.role in ['teacher','admin'] %}
+    <a class="btn btn-outline-primary" href="/courses/{{ course.id }}/live">Live-Modus starten</a>
+    <div class="text-muted small">Zeige den Schülern nur den Beitritts-Code (sichtbar im Live-Modus).</div>
+  {% else %}
+    <a id="joinBtn" class="btn btn-primary d-none" href="/courses/{{ course.id }}/live/join">Live-Session beitreten</a>
+    <form class="d-inline-flex align-items-center ms-2" action="/courses/live/join_by_code" method="get">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input class="form-control form-control-sm me-2" name="code" placeholder="Code eingeben">
+      <button class="btn btn-outline-secondary btn-sm">Beitreten</button>
+    </form>
+  {% endif %}
 </div>
 
 {% if current_user.role in ['teacher','admin'] %}
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script>
-new Sortable(document.getElementById('section-list'), {
+new Sortable(document.getElementById('mix-list'), {
   animation: 150,
   onEnd: function() {
-    const order = [...document.querySelectorAll('#section-list [data-id]')].map((li, idx) => ({id: li.dataset.id, index: idx}));
-    fetch('/courses/{{ course.id }}/reorder', {
+    const order = [...document.querySelectorAll('#mix-list li')].map((li, idx) => ({
+      type: li.dataset.type, id: li.dataset.id, index: idx
+    }));
+    fetch('/courses/{{ course.id }}/reorder_mix', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({order})
     });
   }
 });
+</script>
+{% else %}
+<script>
+// Polling: nur Button anzeigen, wenn Session aktiv
+async function checkLive() {
+  try {
+    const r = await fetch('/courses/{{ course.id }}/live/status');
+    const j = await r.json();
+    const btn = document.getElementById('joinBtn');
+    if (j.active) { btn.classList.remove('d-none'); } else { btn.classList.add('d-none'); }
+  } catch (e) {}
+}
+checkLive(); setInterval(checkLive, 5000);
 </script>
 {% endif %}
 {% endblock %}

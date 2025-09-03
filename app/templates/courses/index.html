@@ -1,46 +1,36 @@
 {% extends 'base.html' %}
-{% block title %}Kurse{% endblock %}
+{% block title %}Meine Kurse{% endblock %}
 {% block content %}
-<h4 class="mb-3">Kurse</h4>
-
-{% if current_user.role in ['teacher', 'admin'] %}
-  <div class="mb-3">
-    <a class="btn btn-outline-primary" href="/courses/manage">Kurse verwalten / anlegen</a>
-  </div>
-{% endif %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Meine Kurse</h4>
+  {% if current_user.role in ['teacher','admin'] %}
+    <a class="btn btn-outline-primary" href="/courses/manage">Kurse verwalten</a>
+  {% endif %}
+</div>
 
 {% if stars is not none %}
-  <div class="alert alert-info">Deine Sterne: <strong>{{ stars }}</strong></div>
+<div class="alert alert-info">Dein Sternestand: <strong>{{ stars }}</strong></div>
 {% endif %}
 
-{% if courses %}
-  <div class="row g-3">
-    {% for c in courses %}
-      <div class="col-md-6">
-        <div class="card h-100">
-          <div class="card-body d-flex flex-column">
-            <h5 class="card-title">
-              {{ c.school_year }} – {{ c.id }}
-            </h5>
-            <div class="text-muted small mb-2">
-              {% set klass = classes.get(c.class_id) %}
-              {% if klass %}Klasse: {{ klass.name }}{% endif %}
-            </div>
-            <div class="mt-auto">
-              <a class="btn btn-primary" href="/courses/{{ c.id }}">Kurs öffnen</a>
-            </div>
-          </div>
+<div class="row row-cols-1 row-cols-md-2 g-3">
+  {% for c in courses %}
+  <div class="col">
+    <div class="card h-100">
+      <div class="card-body">
+        <h6 class="card-title">
+          {{ subjects[c.subject_id].name if subjects.get(c.subject_id) else 'Fach' }}
+        </h6>
+        <div class="text-muted small mb-2">
+          Klasse: {{ classes[c.class_id].name if classes.get(c.class_id) else c.class_id }} · Schuljahr: {{ c.school_year }}
         </div>
+        <a class="btn btn-sm btn-primary" href="/courses/{{ c.id }}">Öffnen</a>
       </div>
-    {% endfor %}
+    </div>
   </div>
-{% else %}
-  <div class="alert alert-info">
-    {% if current_user.role == 'student' %}
-      Für deine Klassen wurden noch keine Kurse angelegt. Bitte Lehrkraft informieren.
-    {% else %}
-      Noch keine Kurse vorhanden. Lege einen Kurs über „Kurse verwalten / anlegen“ an.
-    {% endif %}
+  {% else %}
+  <div class="col">
+    <div class="alert alert-secondary">Keine Kurse gefunden.</div>
   </div>
-{% endif %}
+  {% endfor %}
+</div>
 {% endblock %}

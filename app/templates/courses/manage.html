@@ -3,56 +3,72 @@
 {% block content %}
 <h4 class="mb-3">Kurse verwalten</h4>
 
-<div class="row g-4">
-  <div class="col-lg-6">
-    <div class="card">
+<div class="row">
+  <div class="col-lg-5">
+    <div class="card mb-3">
       <div class="card-body">
-        <h5 class="card-title">Neuen Kurs anlegen</h5>
-        <form method="post" action="/courses/create">
+        <h6 class="card-title">Neuen Kurs anlegen</h6>
+        <form method="post" class="row g-2">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <div class="mb-3">
+          <div class="col-12">
             <label class="form-label">Klasse</label>
-            <select class="form-select" name="class_id" required>
-              {% for cl in classes %}
-                <option value="{{ cl.id }}">{{ cl.name }} ({{ cl.grade_level }})</option>
+            <select name="class_id" class="form-select" required>
+              <option value="" disabled selected>Bitte wählen…</option>
+              {% for c in classes %}
+                <option value="{{ c.id }}">{{ c.name }} ({{ c.grade_level or 'ohne Stufe' }})</option>
               {% endfor %}
             </select>
           </div>
-          <div class="mb-3">
+          <div class="col-12">
             <label class="form-label">Fach</label>
-            <input class="form-control" name="subject_name" placeholder="z. B. Mathe" required>
+            <input name="subject_name" class="form-control" placeholder="z. B. Mathematik" required>
           </div>
-          <div class="mb-3">
+          <div class="col-12">
             <label class="form-label">Schuljahr</label>
-            <input class="form-control" name="school_year" value="{{ default_school_year }}">
-            <div class="form-text">Format: 2025/26 (leer lassen für Auto)</div>
+            <input name="school_year" class="form-control" value="{{ current_year }}">
           </div>
-          <button class="btn btn-primary">Kurs erstellen</button>
+          <div class="col-12">
+            <button class="btn btn-primary w-100">Kurs anlegen</button>
+          </div>
         </form>
+        {% if current_user.role == 'teacher' %}
+        <hr>
+        <a href="/t/class/create" class="btn btn-outline-secondary w-100">Neue Klasse erstellen</a>
+        {% endif %}
       </div>
     </div>
   </div>
 
-  <div class="col-lg-6">
-    <div class="card">
+  <div class="col-lg-7">
+    <div class="card mb-3">
       <div class="card-body">
-        <h5 class="card-title">Vorhandene Kurse</h5>
-        {% if courses %}
-          <ul class="list-group">
-            {% for c in courses %}
-              <li class="list-group-item d-flex justify-content-between align-items-center">
-                <span>
-                  {{ c.school_year }} –
-                  {% if subjects.get(c.subject_id) %}{{ subjects[c.subject_id].name }}{% else %}Fach{% endif %}
-                  · Klasse: {{ c.class_id }}
-                </span>
-                <a class="btn btn-sm btn-outline-primary" href="/courses/{{ c.id }}">Öffnen</a>
-              </li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <div class="text-muted">Noch keine Kurse angelegt.</div>
-        {% endif %}
+        <h6 class="card-title">Vorhandene Kurse</h6>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Klasse</th>
+                <th>Fach</th>
+                <th>Schuljahr</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for crs in courses %}
+              <tr>
+                <td>{{ class_map[crs.class_id].name if class_map.get(crs.class_id) else crs.class_id }}</td>
+                <td>{{ subject_map[crs.subject_id].name if subject_map.get(crs.subject_id) else crs.subject_id }}</td>
+                <td>{{ crs.school_year }}</td>
+                <td class="text-end">
+                  <a class="btn btn-sm btn-outline-primary" href="/courses/{{ crs.id }}">Öffnen</a>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="text-muted">Noch keine Kurse vorhanden.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

@@ -1,29 +1,122 @@
-from flask import Blueprint
-from ..extensions import socketio
+from flask import request
 from flask_login import current_user
-from flask_socketio import join_room
+from . import bp
+from ..extensions import socketio, db
+from ..models import LiveSession, SubjectYear, Enrollment, ContentNode
+from flask_socketio import join_room, leave_room, emit
+from datetime import datetime as dt
 
-bp = Blueprint("live", __name__)  # HTTP-Routen optional; SocketIO unten
+def _room(session_id: str) -> str:
+    return f"live:{session_id}"
 
-@socketio.on("join_session")
-def on_join_session(data):
-    room = (data or {}).get("session_id")
-    if not room:
+def _can_access_course(user_id: str, course_id: str) -> bool:
+    course = db.session.get(SubjectYear, course_id)
+    if not course:
+        return False
+    if current_user.role == "admin":
+        return True
+    return Enrollment.query.filter_by(class_id=course.class_id, user_id=user_id).first() is not None
+
+def _current_slide_payload(sess: LiveSession):
+    # Finde aktuelle Folie und liefere HTML (body_html bevorzugt, sonst body_md)
+    nodes = ContentNode.query.filter_by(subject_year_id=sess.course_id)\
+        .order_by(ContentNode.order_index.asc(), ContentNode.title.asc()).all()
+    html = ""
+    if 0 <= (sess.current_slide or 0) < len(nodes):
+        n = nodes[sess.current_slide]
+        html = (n.body_html or n.body_md or "")
+    return {"index": sess.current_slide or 0, "html": html}
+
+@socketio.on("join_live")
+def on_join_live(data):
+    session_id = (data or {}).get("session_id")
+    role = (data or {}).get("role", "student")
+    if not session_id:
         return
-    join_room(room)
-
-@socketio.on("slide_to")
-def on_slide_to(data):
-    room = (data or {}).get("room")
-    index = (data or {}).get("index")
-    if room is None or index is None:
+    sess = db.session.get(LiveSession, session_id)
+    if not sess or not sess.active:
         return
-    socketio.emit("slide_changed", {"index": index}, to=room)
+    if not _can_access_course(current_user.id, sess.course_id):
+        return
+    join_room(_room(session_id))
+    # Nur dem neuen Client den aktuellen Zustand schicken
+    emit("slide_change", _current_slide_payload(sess), room=request.sid)
+    # Info in den Raum
+    emit("user_joined", {"user_id": current_user.id, "role": role}, to=_room(session_id))
+
+@socketio.on("leave_live")
+def on_leave_live(data):
+    session_id = (data or {}).get("session_id")
+    if not session_id:
+        return
+    leave_room(_room(session_id))
+    emit("user_left", {"user_id": current_user.id}, to=_room(session_id))
+
+@socketio.on("slide_change")
+def on_slide_change(data):
+    session_id = data.get("session_id")
+    idx = int(data.get("index", 0))
+    html = data.get("html", "")
+    sess = db.session.get(LiveSession, session_id)
+    if not sess or not sess.active:
+        return
+    # Nur Host darf steuern
+    if current_user.id != sess.host_user_id and current_user.role != "admin":
+        return
+    sess.current_slide = idx
+    db.session.commit()
+    emit("slide_change", {"index": idx, "html": html}, to=_room(session_id), include_self=False)
 
 @socketio.on("draw")
 def on_draw(data):
-    room = (data or {}).get("room")
-    if not room:
+    session_id = data.get("session_id")
+    payload = {
+        "slide": int(data.get("slide", 0)),
+        "x0": float(data.get("x0", 0)),
+        "y0": float(data.get("y0", 0)),
+        "x1": float(data.get("x1", 0)),
+        "y1": float(data.get("y1", 0)),
+        "w": float(data.get("w", 2)),
+        "c": data.get("c", None),
+    }
+    sess = db.session.get(LiveSession, session_id)
+    if not sess or not sess.active:
         return
-    # Broadcast Zeichnung (x0,y0,x1,y1,color,width,slide)
-    socketio.emit("draw", data, to=room)
+    if current_user.id != sess.host_user_id and current_user.role != "admin":
+        return
+    emit("draw", payload, to=_room(session_id), include_self=False)
+
+@socketio.on("clear")
+def on_clear(data):
+    session_id = data.get("session_id")
+    slide = int(data.get("slide", 0))
+    sess = db.session.get(LiveSession, session_id)
+    if not sess or not sess.active:
+        return
+    if current_user.id != sess.host_user_id and current_user.role != "admin":
+        return
+    emit("clear", {"slide": slide}, to=_room(session_id), include_self=False)
+
+@socketio.on("request_state")
+def on_request_state(data):
+    # Fallback: Client kann aktiv um den aktuellen Stand bitten
+    session_id = data.get("session_id")
+    sess = db.session.get(LiveSession, session_id)
+    if not sess or not sess.active:
+        return
+    if not _can_access_course(current_user.id, sess.course_id):
+        return
+    emit("slide_change", _current_slide_payload(sess), room=request.sid)
+
+@socketio.on("end_session")
+def on_end_session(data):
+    session_id = data.get("session_id")
+    sess = db.session.get(LiveSession, session_id)
+    if not sess or not sess.active:
+        return
+    if current_user.id != sess.host_user_id and current_user.role != "admin":
+        return
+    sess.active = False
+    sess.ended_at = dt.utcnow()
+    db.session.commit()
+    emit("ended", {}, to=_room(session_id))

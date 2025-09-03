@@ -3,17 +3,12 @@ from datetime import datetime
 from flask_login import UserMixin
 from .extensions import db
 
-# Portabler JSON-Typ
 JSONType = db.JSON
-
 
 def gen_id():
     return str(uuid.uuid4())
 
-
-# ----------------------------
-# Basis-Entitäten
-# ----------------------------
+# --- Users / Klassen ---
 class User(UserMixin, db.Model):
     __tablename__ = "users"
     id = db.Column(db.String, primary_key=True, default=gen_id)
@@ -22,7 +17,6 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String, nullable=False)
     role = db.Column(db.String, nullable=False)  # teacher|student|admin
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class Class(db.Model):
     __tablename__ = "classes"
@@ -33,25 +27,20 @@ class Class(db.Model):
     created_by = db.Column(db.String, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 class Subject(db.Model):
     __tablename__ = "subjects"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     name = db.Column(db.String, unique=True, nullable=False)
-
 
 class SubjectYear(db.Model):
     __tablename__ = "subject_years"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     class_id = db.Column(db.String, db.ForeignKey("classes.id"), nullable=False)
     subject_id = db.Column(db.String, db.ForeignKey("subjects.id"), nullable=False)
-    school_year = db.Column(db.String, nullable=False)  # z.B. "2025/26"
+    school_year = db.Column(db.String, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-# ----------------------------
-# Inhalte / Struktur
-# ----------------------------
+# --- Inhalte ---
 class ContentNode(db.Model):
     __tablename__ = "content_nodes"
     id = db.Column(db.String, primary_key=True, default=gen_id)
@@ -62,17 +51,16 @@ class ContentNode(db.Model):
     type = db.Column(db.String(16), nullable=False)     # section|lesson|exercise|media
     title = db.Column(db.String(255), nullable=False)
     body_md = db.Column(db.Text)
-    body_html = db.Column(db.Text)                      # WYSIWYG für A4/PDF & Live
-    media = db.Column(JSONType)                         # [{type:"image|video", url, alt}]
+    body_html = db.Column(db.Text)                      # WYSIWYG (inkl. Bilder/Videos)
+    media = db.Column(JSONType)
     order_index = db.Column(db.Integer, default=0)
 
-    generated_by = db.Column(db.String(16))             # teacher|ai
+    generated_by = db.Column(db.String(16))
     approved = db.Column(db.Boolean, default=False)
     approved_by = db.Column(db.String)
     approved_at = db.Column(db.DateTime)
 
-    # Freischaltung (Kurs-Fortschritt)
-    released_at = db.Column(db.DateTime, nullable=True)  # null = gesperrt
+    released_at = db.Column(db.DateTime, nullable=True)
     release_order = db.Column(db.Integer, default=0)
 
     __table_args__ = (
@@ -81,22 +69,18 @@ class ContentNode(db.Model):
         db.Index("ix_cn_subject_release", "subject_year_id", "release_order"),
     )
 
-
 class Exercise(db.Model):
     __tablename__ = "exercises"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     content_node_id = db.Column(db.String, db.ForeignKey("content_nodes.id"), nullable=False)
     kind = db.Column(db.String, nullable=False)     # mc|short_answer
     prompt_md = db.Column(db.Text, nullable=False)
-    options = db.Column(JSONType)                   # bei MC
-    answer_schema = db.Column(JSONType)             # richtige Antwort/Regeln
-    difficulty = db.Column(db.Integer)              # 1..5
+    options = db.Column(JSONType)
+    answer_schema = db.Column(JSONType)
+    difficulty = db.Column(db.Integer)
     tags = db.Column(JSONType)
 
-
-# ----------------------------
-# Zuweisung / Abgaben
-# ----------------------------
+# --- Zugehörigkeit / Abgaben ---
 class Enrollment(db.Model):
     __tablename__ = "enrollments"
     id = db.Column(db.String, primary_key=True, default=gen_id)
@@ -104,12 +88,10 @@ class Enrollment(db.Model):
     user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
     role_in_class = db.Column(db.String, nullable=False)  # student|teacher
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
     __table_args__ = (
         db.UniqueConstraint("class_id", "user_id", name="uq_enrollment_user_class"),
         db.Index("ix_enrollments_class", "class_id"),
     )
-
 
 class Assignment(db.Model):
     __tablename__ = "assignments"
@@ -118,7 +100,6 @@ class Assignment(db.Model):
     class_id = db.Column(db.String, db.ForeignKey("classes.id"), nullable=False)
     due_at = db.Column(db.DateTime, nullable=True)
     created_by = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
-
 
 class Submission(db.Model):
     __tablename__ = "submissions"
@@ -132,20 +113,16 @@ class Submission(db.Model):
     first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-# ----------------------------
-# Sterne & Belohnungen
-# ----------------------------
+# --- Sterne & Belohnungen ---
 class StarTransaction(db.Model):
     __tablename__ = "star_transactions"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
     assignment_id = db.Column(db.String, db.ForeignKey("assignments.id"), nullable=True)
-    amount = db.Column(db.Integer, nullable=False)   # +earn, -spend
+    amount = db.Column(db.Integer, nullable=False)
     reason = db.Column(db.String, nullable=False)    # submission|bonus|spend|admin
     created_by = db.Column(db.String, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class RewardCatalog(db.Model):
     __tablename__ = "reward_catalog"
@@ -153,13 +130,12 @@ class RewardCatalog(db.Model):
     key = db.Column(db.String, unique=True, nullable=False)
     title = db.Column(db.String, nullable=False)
     description = db.Column(db.Text)
-    type = db.Column(db.String)      # cosmetic|perk|privilege
+    type = db.Column(db.String)
     cost_stars = db.Column(db.Integer, nullable=False)
     active_from = db.Column(db.DateTime, nullable=True)
     active_to = db.Column(db.DateTime, nullable=True)
     max_per_student = db.Column(db.Integer, nullable=True)
-    meta = db.Column(JSONType)       # statt "metadata" (reserviert)
-
+    meta = db.Column(JSONType)
 
 class UserRewardUnlock(db.Model):
     __tablename__ = "user_reward_unlocks"
@@ -170,23 +146,29 @@ class UserRewardUnlock(db.Model):
     spent_stars = db.Column(db.Integer, default=0)
     expires_at = db.Column(db.DateTime, nullable=True)
 
+# --- NEU: LiveSession (für Live-Unterricht) ---
+class LiveSession(db.Model):
+    __tablename__ = "live_sessions"
+    id = db.Column(db.String, primary_key=True, default=gen_id)
+    course_id = db.Column(db.String, db.ForeignKey("subject_years.id"), nullable=False)
+    host_user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
+    join_code = db.Column(db.String(12), unique=True, nullable=False)
+    current_slide = db.Column(db.Integer, default=0)
+    active = db.Column(db.Boolean, default=True)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow)
+    ended_at = db.Column(db.DateTime, nullable=True)
 
-# ----------------------------
-# KI-Profile (system-only)
-# ----------------------------
+# --- KI-Profile ---
 class AIProfile(db.Model):
     __tablename__ = "ai_profiles"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     user_id = db.Column(db.String, db.ForeignKey("users.id"), unique=True, nullable=False)
-    traits = db.Column(JSONType)  # {learning_style, pace, mastery_by_tag, help_preference}
+    traits = db.Column(JSONType)
     visibility = db.Column(db.String, default="system-only")
     retention_days = db.Column(db.Integer, default=90)
     last_updated = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-# ----------------------------
-# Dokumente (Uploads)
-# ----------------------------
+# --- Dokumente (Uploads) mit Sortierung ---
 class Document(db.Model):
     __tablename__ = "documents"
     id = db.Column(db.String, primary_key=True, default=gen_id)
@@ -197,3 +179,4 @@ class Document(db.Model):
     mime_type = db.Column(db.String, nullable=True)
     uploaded_by = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    order_index = db.Column(db.Integer, default=0)            # NEU: für gemischte Liste
