@@ -18,6 +18,10 @@ from ..models import (
 
 ALLOWED_DOC_EXTS = {"pdf","png","jpg","jpeg","doc","docx","ppt","pptx","xls","xlsx","txt"}
 
+def _nodes_for_course_sorted(course_id):
+    return ContentNode.query.filter_by(subject_year_id=course_id)\
+        .order_by(ContentNode.order_index.asc(), ContentNode.title.asc()).all()
+
 def _gen_code(n=6):
     charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "".join(random.choice(charset) for _ in range(n))
@@ -216,18 +220,18 @@ def live(course_id):
     if current_user.role != "admin":
         if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id, role_in_class="teacher").first():
             abort(403)
+
     sess = LiveSession.query.filter_by(course_id=course.id, active=True).first()
     if not sess:
         from datetime import datetime as dt
-        from .routes import _gen_code  # falls oben, sonst eigene _gen_code nutzen
+        from .routes import _gen_code  # falls bereits in dieser Datei vorhanden
         sess = LiveSession(id=gen_id(), course_id=course.id, host_user_id=current_user.id,
-                           join_code=_gen_code(), started_at=dt.utcnow(), active=True)
+                           join_code=_gen_code(), started_at=dt.utcnow(), active=True, current_slide=0, revealed_ids=[])
         db.session.add(sess); db.session.commit()
 
-    nodes = ContentNode.query.filter_by(subject_year_id=course.id)\
-        .order_by(ContentNode.order_index.asc(), ContentNode.title.asc()).all()
-    slides = [{"id": n.id, "html": (n.body_html or n.body_md or "")} for n in nodes]
-
+    nodes = _nodes_for_course_sorted(course.id)
+    # Für die Seitenliste: reines Meta
+    slides = [{"id": n.id, "type": n.type, "title": n.title} for n in nodes]
     return render_template("courses/live.html", course=course, slides=slides, session=sess)
 
 
@@ -247,6 +251,25 @@ def live_join(course_id):
         flash("Aktuell läuft keine Live-Session.", "info")
         return redirect(url_for("courses.detail", course_id=course_id))
     return render_template("courses/live_student.html", course=course, session=sess)
+
+# ---------- Live-Ende per HTTP (robust) ----------
+@bp.route("/<course_id>/live/end", methods=["POST"])
+@login_required
+def live_end(course_id):
+    course = db.session.get(SubjectYear, course_id)
+    if not course: abort(404)
+    if current_user.role not in ("teacher","admin"): abort(403)
+    sess = LiveSession.query.filter_by(course_id=course.id, active=True).first()
+    if not sess:
+        return jsonify({"ok": True})  # schon beendet
+    if current_user.id != sess.host_user_id and current_user.role != "admin":
+        abort(403)
+    sess.active = False
+    sess.ended_at = dt.utcnow()
+    db.session.commit()
+    from ..extensions import socketio
+    socketio.emit("ended", {}, to=f"live:{sess.id}")
+    return jsonify({"ok": True})
 
 # ---------- Join per Code ----------
 @bp.route("/live/join_by_code")
@@ -408,6 +431,34 @@ def exercise_submit(course_id, node_id):
     db.session.add(StarTransaction(id=gen_id(), user_id=current_user.id, assignment_id=None, amount=1, reason="submission", created_by=None))
     db.session.commit()
     flash("Abgabe gespeichert. +1 Stern", "success")
+    return redirect(url_for("courses.detail", course_id=course_id))
+
+@bp.route("/<course_id>/exercise/<node_id>/edit")
+@login_required
+def exercise_edit(course_id, node_id):
+    n = db.session.get(ContentNode, node_id)
+    if not n or n.subject_year_id != course_id or n.type != "exercise": abort(404)
+    if current_user.role not in ("teacher","admin"): abort(403)
+    ex = Exercise.query.filter_by(content_node_id=n.id).first()
+    if not ex:
+        ex = Exercise(id=gen_id(), content_node_id=n.id, kind="rich")
+        db.session.add(ex); db.session.commit()
+    return render_template("courses/exercise_edit.html", node=n, ex=ex, course_id=course_id)
+
+@bp.route("/<course_id>/exercise/<node_id>/save", methods=["POST"])
+@login_required
+def exercise_save(course_id, node_id):
+    n = db.session.get(ContentNode, node_id)
+    if not n or n.subject_year_id != course_id or n.type != "exercise": abort(404)
+    if current_user.role not in ("teacher","admin"): abort(403)
+    ex = Exercise.query.filter_by(content_node_id=n.id).first()
+    if not ex:
+        ex = Exercise(id=gen_id(), content_node_id=n.id, kind="rich")
+        db.session.add(ex)
+    ex.prompt_html = request.form.get("prompt_html", "")
+    ex.solution_html = request.form.get("solution_html", "")
+    db.session.commit()
+    flash("Übung gespeichert.", "success")
     return redirect(url_for("courses.detail", course_id=course_id))
 
 # ---------- Dateien & Assets SERVEN (fix für Bilder aus dem Editor) ----------

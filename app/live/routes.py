@@ -2,7 +2,7 @@ from flask import request
 from flask_login import current_user
 from . import bp
 from ..extensions import socketio, db
-from ..models import LiveSession, SubjectYear, Enrollment, ContentNode
+from ..models import LiveSession, SubjectYear, Enrollment, ContentNode, Exercise
 from flask_socketio import join_room, leave_room, emit
 from datetime import datetime as dt
 
@@ -17,15 +17,33 @@ def _can_access_course(user_id: str, course_id: str) -> bool:
         return True
     return Enrollment.query.filter_by(class_id=course.class_id, user_id=user_id).first() is not None
 
+def _slide_html_for_node(node: ContentNode, revealed_ids: list) -> str:
+    """Erzeuge HTML für Abschnitt/Übung. Lösung nur, wenn ge-revealed."""
+    if node.type == "exercise":
+        ex = Exercise.query.filter_by(content_node_id=node.id).first()
+        prompt = (ex.prompt_html or ex.prompt_md or "")
+        solution = (ex.solution_html or "")
+        show_solution = node.id in (revealed_ids or [])
+        return f"""
+        <div class='ex-wrapper' data-node-id='{node.id}'>
+          <div class='ex-prompt'>{prompt}</div>
+          <div class='ex-solution {"": if show_solution else "d-none"}'>
+            <hr><div class='alert alert-success'><strong>Lösung:</strong></div>
+            {solution}
+          </div>
+        </div>
+        """
+    # Abschnitt
+    return (node.body_html or node.body_md or "")
+
 def _current_slide_payload(sess: LiveSession):
-    # Finde aktuelle Folie und liefere HTML (body_html bevorzugt, sonst body_md)
     nodes = ContentNode.query.filter_by(subject_year_id=sess.course_id)\
         .order_by(ContentNode.order_index.asc(), ContentNode.title.asc()).all()
+    idx = int(sess.current_slide or 0)
     html = ""
-    if 0 <= (sess.current_slide or 0) < len(nodes):
-        n = nodes[sess.current_slide]
-        html = (n.body_html or n.body_md or "")
-    return {"index": sess.current_slide or 0, "html": html}
+    if 0 <= idx < len(nodes):
+        html = _slide_html_for_node(nodes[idx], sess.revealed_ids or [])
+    return {"index": idx, "html": html}
 
 @socketio.on("join_live")
 def on_join_live(data):
@@ -39,9 +57,8 @@ def on_join_live(data):
     if not _can_access_course(current_user.id, sess.course_id):
         return
     join_room(_room(session_id))
-    # Nur dem neuen Client den aktuellen Zustand schicken
+    # aktuellen Zustand nur an den neuen Client
     emit("slide_change", _current_slide_payload(sess), room=request.sid)
-    # Info in den Raum
     emit("user_joined", {"user_id": current_user.id, "role": role}, to=_room(session_id))
 
 @socketio.on("leave_live")
@@ -56,16 +73,15 @@ def on_leave_live(data):
 def on_slide_change(data):
     session_id = data.get("session_id")
     idx = int(data.get("index", 0))
-    html = data.get("html", "")
     sess = db.session.get(LiveSession, session_id)
     if not sess or not sess.active:
         return
-    # Nur Host darf steuern
     if current_user.id != sess.host_user_id and current_user.role != "admin":
         return
     sess.current_slide = idx
     db.session.commit()
-    emit("slide_change", {"index": idx, "html": html}, to=_room(session_id), include_self=False)
+    # HTML wird serverseitig gebaut → garantiert konsistent, inkl. reveal-state
+    emit("slide_change", _current_slide_payload(sess), to=_room(session_id), include_self=False)
 
 @socketio.on("draw")
 def on_draw(data):
@@ -97,16 +113,25 @@ def on_clear(data):
         return
     emit("clear", {"slide": slide}, to=_room(session_id), include_self=False)
 
-@socketio.on("request_state")
-def on_request_state(data):
-    # Fallback: Client kann aktiv um den aktuellen Stand bitten
+@socketio.on("reveal_solution")
+def on_reveal_solution(data):
+    """Lehrer blendet Lösung ein/aus für die aktuelle Übung."""
     session_id = data.get("session_id")
+    node_id = data.get("node_id")
+    reveal = bool(data.get("reveal", True))
     sess = db.session.get(LiveSession, session_id)
     if not sess or not sess.active:
         return
-    if not _can_access_course(current_user.id, sess.course_id):
+    if current_user.id != sess.host_user_id and current_user.role != "admin":
         return
-    emit("slide_change", _current_slide_payload(sess), room=request.sid)
+    ids = set(sess.revealed_ids or [])
+    if reveal:
+        ids.add(node_id)
+    else:
+        ids.discard(node_id)
+    sess.revealed_ids = list(ids)
+    db.session.commit()
+    emit("solution_reveal", {"node_id": node_id, "reveal": reveal}, to=_room(session_id), include_self=True)
 
 @socketio.on("end_session")
 def on_end_session(data):

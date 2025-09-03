@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Live-Modus (Lehrer){% endblock %}
 {% block content %}
-<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdn.socket.io/4.7.4/socket.io.min.js" crossorigin="anonymous"></script>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h4 class="mb-0">Live-Modus</h4>
@@ -12,11 +12,14 @@
 </div>
 
 <div class="row g-3">
-  <div class="col-lg-4">
+  <div class="col-lg-3">
     <div class="list-group" id="slides-list" style="max-height:70vh;overflow:auto;">
       {% for s in slides %}
         <a href="#" class="list-group-item list-group-item-action slide-link" data-idx="{{ loop.index0 }}">
-          <span class="badge bg-primary">Slide {{ loop.index }}</span>
+          <span class="badge {{ 'bg-info' if s.type=='exercise' else 'bg-primary' }}">
+            {{ 'Übung' if s.type=='exercise' else 'Abschnitt' }}
+          </span>
+          <span class="ms-2">{{ s.title }}</span>
         </a>
       {% else %}
         <div class="text-muted small">Keine Inhalte.</div>
@@ -24,27 +27,36 @@
     </div>
   </div>
 
-  <div class="col-lg-8">
+  <div class="col-lg-9">
     <div class="card"><div class="card-body">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <div>
+      <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+        <div class="btn-group">
           <button id="prev" class="btn btn-outline-secondary btn-sm">‹</button>
           <button id="next" class="btn btn-outline-secondary btn-sm">›</button>
         </div>
+
+        <div class="btn-group" id="exercise-controls" style="display:none;">
+          <button id="reveal" class="btn btn-outline-success btn-sm">Lösung zeigen</button>
+          <button id="hide" class="btn btn-outline-warning btn-sm">Lösung ausblenden</button>
+        </div>
+
         <div class="d-flex align-items-center gap-2">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="drawToggle">
+            <label class="form-check-label" for="drawToggle">Zeichnen aktiv</label>
+          </div>
           <input type="color" id="color" value="#000000" class="form-control form-control-color">
           <select id="width" class="form-select form-select-sm" style="width:auto;">
             <option>2</option><option>4</option><option>6</option><option>8</option><option>12</option>
           </select>
           <button id="clear" class="btn btn-warning btn-sm">Seite löschen</button>
-          <button id="end" class="btn btn-danger btn-sm">Beenden & PDF</button>
+          <button id="end" class="btn btn-danger btn-sm">Beenden</button>
         </div>
       </div>
 
-      <div id="slide-content" class="mb-2" style="min-height:120px;">
-        {% if slides|length %}{{ slides[0].html | safe }}{% endif %}
-      </div>
-      <canvas id="wb" width="1200" height="800" class="border w-100" style="aspect-ratio:3/2;"></canvas>
+      <div id="slide-content" class="mb-2" style="min-height:120px;"></div>
+      <canvas id="wb" width="1200" height="800" class="border w-100"
+              style="aspect-ratio:3/2; touch-action:none;"></canvas>
     </div></div>
   </div>
 </div>
@@ -52,9 +64,8 @@
 <script>
 (function(){
   const sessionId = "{{ session.id }}";
-  const socket = io({ withCredentials: true });
-
-  socket.emit('join_live', {session_id: sessionId, role: 'teacher'});
+  const courseId  = "{{ course.id }}";
+  const socket = io({ path: "/socket.io" });
 
   const slides = {{ slides|tojson }};
   let idx = 0;
@@ -62,80 +73,88 @@
   const slideEl = document.getElementById('slide-content');
   const list = document.getElementById('slides-list');
 
-  list.querySelectorAll('.slide-link').forEach(a => {
-    a.addEventListener('click', (e) => { e.preventDefault(); idx = parseInt(a.dataset.idx||'0'); renderSlide(true); });
-  });
-  document.getElementById('prev').onclick = () => { if (idx>0){ idx--; renderSlide(true);} };
-  document.getElementById('next').onclick = () => { if (idx<slides.length-1){ idx++; renderSlide(true);} };
-
+  const toggle = document.getElementById('drawToggle');
   const cvs = document.getElementById('wb');
   const ctx = cvs.getContext('2d');
   const color = document.getElementById('color');
   const width = document.getElementById('width');
-  const buf = new Map();
+  const exControls = document.getElementById('exercise-controls');
+  const btnReveal = document.getElementById('reveal');
+  const btnHide   = document.getElementById('hide');
 
   let drawing=false, last=null;
-  cvs.addEventListener('pointerdown', e => { drawing=true; last=[e.offsetX,e.offsetY]; });
-  cvs.addEventListener('pointerup', ()=>{ drawing=false; last=null; saveBuf(); });
-  cvs.addEventListener('pointerleave', ()=>{ drawing=false; last=null; saveBuf(); });
-  cvs.addEventListener('pointermove', e => {
-    if (!drawing || !last) return;
-    draw(last[0], last[1], e.offsetX, e.offsetY, parseInt(width.value), color.value, true);
-    last=[e.offsetX,e.offsetY];
+
+  socket.emit('join_live', {session_id: sessionId, role: 'teacher'});
+
+  // Navigation
+  list.querySelectorAll('.slide-link').forEach(a => {
+    a.addEventListener('click', (e) => { e.preventDefault(); idx = parseInt(a.dataset.idx||'0'); sendSlide(); });
+  });
+  document.getElementById('prev').onclick = () => { if (idx>0){ idx--; sendSlide();} };
+  document.getElementById('next').onclick = () => { if (idx<slides.length-1){ idx++; sendSlide();} };
+
+  // Zeichnen
+  ['pointerdown','pointermove','pointerup','pointerleave','touchstart','touchmove','touchend'].forEach(ev=>{
+    cvs.addEventListener(ev, e=>{
+      if (!toggle.checked) return;
+      e.preventDefault();
+      const rect = cvs.getBoundingClientRect();
+      const x = (e.clientX ?? (e.touches?.[0]?.clientX)) - rect.left;
+      const y = (e.clientY ?? (e.touches?.[0]?.clientY)) - rect.top;
+      if (ev==='pointerdown' || ev==='touchstart'){ drawing=true; last=[x,y]; return; }
+      if ((ev==='pointerup'||ev==='pointerleave'||ev==='touchend')){ drawing=false; last=null; return; }
+      if (!drawing || !last) return;
+      draw(last[0], last[1], x, y, parseInt(width.value), color.value, true);
+      last=[x,y];
+    }, {passive:false});
   });
 
-  function draw(x0,y0,x1,y1,w,c,bcast){
+  function draw(x0,y0,x1,y1,w,c,b){
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1);
-    ctx.lineWidth=w; ctx.lineCap='round'; ctx.strokeStyle=c||'#000';
-    ctx.stroke();
-    if (bcast) socket.emit('draw', {session_id: sessionId, slide: idx, x0,y0,x1,y1,w,c});
-  }
-  function clearSlide(bcast){
-    ctx.clearRect(0,0,cvs.width,cvs.height);
-    if (bcast) socket.emit('clear', {session_id: sessionId, slide: idx});
-    saveBuf();
-  }
-  function saveBuf(){ buf.set(idx, cvs.toDataURL('image/png')); }
-  function restoreBuf(){
-    const imgData = buf.get(idx);
-    ctx.clearRect(0,0,cvs.width,cvs.height);
-    if (!imgData) return;
-    const img = new Image();
-    img.onload = ()=> ctx.drawImage(img,0,0,cvs.width,cvs.height);
-    img.src = imgData;
+    ctx.lineWidth=w; ctx.lineCap='round'; ctx.strokeStyle=c||'#000'; ctx.stroke();
+    if (b) socket.emit('draw', {session_id: sessionId, slide: idx, x0,y0,x1,y1,w,c});
   }
 
-  document.getElementById('clear').onclick = ()=> clearSlide(true);
-
-  document.getElementById('end').onclick = async ()=>{
-    socket.emit('end_session', {session_id: sessionId});
-    const pages = [];
-    for (let i=0;i<slides.length;i++){
-      const img = buf.get(i);
-      if (img) pages.push(img);
-    }
-    if (pages.length){
-      const r = await fetch(window.location.pathname.replace('/live','/live/export'), {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({images: pages})
-      });
-      const j = await r.json();
-      if (j.ok && j.pdf_url) window.location = j.pdf_url;
-    }
-    window.location = window.location.pathname.replace('/live','');
+  document.getElementById('clear').onclick = ()=> {
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    socket.emit('clear', {session_id: sessionId, slide: idx});
   };
 
-  function renderSlide(bcast){
-    slideEl.innerHTML = slides[idx]?.html || '';
-    restoreBuf();
-    if (bcast){
-      socket.emit('slide_change', {session_id: sessionId, index: idx, html: slideEl.innerHTML});
-    }
+  // Lösung show/hide
+  btnReveal.onclick = ()=> {
+    const nodeId = slides[idx]?.id;
+    socket.emit('reveal_solution', {session_id: sessionId, node_id: nodeId, reveal: true});
+  };
+  btnHide.onclick = ()=> {
+    const nodeId = slides[idx]?.id;
+    socket.emit('reveal_solution', {session_id: sessionId, node_id: nodeId, reveal: false});
+  };
+
+  // Session beenden (HTTP + Socket)
+  document.getElementById('end').onclick = async ()=>{
+    try {
+      await fetch(`/courses/${courseId}/live/end`, {method:'POST', headers:{'X-Requested-With':'fetch'}});
+    } catch (e) {}
+    socket.emit('end_session', {session_id: sessionId});
+  };
+
+  // Slide versenden: Server baut HTML (inkl. reveal-state)
+  function sendSlide(){
+    exControls.style.display = (slides[idx]?.type === 'exercise') ? '' : 'none';
+    socket.emit('slide_change', {session_id: sessionId, index: idx});
   }
 
-  socket.on('clear', data => { if (data.slide===idx) restoreBuf(); });
+  // Empfang
+  socket.on('slide_change', data => {
+    idx = data.index || 0;
+    slideEl.innerHTML = data.html || '';
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    exControls.style.display = (slides[idx]?.type === 'exercise') ? '' : 'none';
+  });
+  socket.on('ended', () => { window.location = `/courses/${courseId}`; });
 
-  renderSlide(true);
+  // initiale Folie anstoßen
+  sendSlide();
 })();
 </script>
 {% endblock %}

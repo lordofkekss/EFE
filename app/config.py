@@ -23,8 +23,9 @@ class Config:
     AI_PROFILES_RETENTION_DAYS = int(os.getenv("AI_PROFILES_RETENTION_DAYS", 90))
     EVENTS_RETENTION_DAYS = int(os.getenv("EVENTS_RETENTION_DAYS", 180))
 
-    # Uploads
-    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str((BASE_DIR / "uploads").as_posix()))
+
+    # Uploads (für Editor-Bilder & Exporte)
+    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
 
     # --- DB Reset-Schalter (.env) ---
     DB_RESET_ON_START = _env_bool("DB_RESET", False)          # "1"/"true" → Reset beim Start

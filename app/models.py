@@ -69,16 +69,22 @@ class ContentNode(db.Model):
         db.Index("ix_cn_subject_release", "subject_year_id", "release_order"),
     )
 
+# ---  Exercise ---
 class Exercise(db.Model):
     __tablename__ = "exercises"
     id = db.Column(db.String, primary_key=True, default=gen_id)
-    content_node_id = db.Column(db.String, db.ForeignKey("content_nodes.id"), nullable=False)
-    kind = db.Column(db.String, nullable=False)     # mc|short_answer
-    prompt_md = db.Column(db.Text, nullable=False)
+    content_node_id = db.Column(db.String, db.ForeignKey("content_nodes.id"))
+    kind = db.Column(db.String)  # mc|short_answer|rich
+    # Alte Felder bleiben:
+    prompt_md = db.Column(db.Text)
+    # Neu: HTML-Felder für Editor
+    prompt_html = db.Column(db.Text)      # Aufgabe (rich text)
+    solution_html = db.Column(db.Text)    # Lösung (rich text)
     options = db.Column(JSONType)
     answer_schema = db.Column(JSONType)
     difficulty = db.Column(db.Integer)
     tags = db.Column(JSONType)
+
 
 # --- Zugehörigkeit / Abgaben ---
 class Enrollment(db.Model):
@@ -146,7 +152,7 @@ class UserRewardUnlock(db.Model):
     spent_stars = db.Column(db.Integer, default=0)
     expires_at = db.Column(db.DateTime, nullable=True)
 
-# --- NEU: LiveSession (für Live-Unterricht) ---
+# --- LiveSession (für Live-Unterricht) ---
 class LiveSession(db.Model):
     __tablename__ = "live_sessions"
     id = db.Column(db.String, primary_key=True, default=gen_id)
@@ -157,6 +163,8 @@ class LiveSession(db.Model):
     active = db.Column(db.Boolean, default=True)
     started_at = db.Column(db.DateTime, default=datetime.utcnow)
     ended_at = db.Column(db.DateTime, nullable=True)
+    # Neu: welche Übungen aktuell mit Lösung gezeigt werden
+    revealed_ids = db.Column(JSONType, default=list)
 
 # --- KI-Profile ---
 class AIProfile(db.Model):

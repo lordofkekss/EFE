@@ -1,10 +1,9 @@
 {% extends 'base.html' %}
 {% block title %}Live-Session{% endblock %}
 {% block content %}
-<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdn.socket.io/4.7.4/socket.io.min.js" crossorigin="anonymous"></script>
 
 <h4 class="mb-3">Live-Session</h4>
-
 <div class="card"><div class="card-body">
   <div id="slide-content" class="mb-2" style="min-height:120px;"></div>
   <canvas id="wb" width="1200" height="800" class="border w-100" style="aspect-ratio:3/2;"></canvas>
@@ -14,43 +13,38 @@
 <script>
 (function(){
   const sessionId = "{{ session.id }}";
-  const socket = io({ withCredentials: true });
+  const courseId  = "{{ course.id }}";
+  const socket = io({ path: "/socket.io" });
 
   const slideEl = document.getElementById('slide-content');
   const cvs = document.getElementById('wb');
   const ctx = cvs.getContext('2d');
   let idx = 0;
 
-  function drawLine(x0,y0,x1,y1,w,c){
-    ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1);
-    ctx.lineWidth=w; ctx.lineCap='round'; ctx.strokeStyle=c||'#000';
-    ctx.stroke();
-  }
-  function clearSlide(){ ctx.clearRect(0,0,cvs.width,cvs.height); }
-
   socket.emit('join_live', {session_id: sessionId, role: 'student'});
 
-  // Falls der initiale Push aus irgendeinem Grund nicht kommt, nach 500ms aktiv anfragen
-  setTimeout(()=> socket.emit('request_state', {session_id: sessionId}), 500);
+  function drawLine(x0,y0,x1,y1,w,c){
+    ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1);
+    ctx.lineWidth=w; ctx.lineCap='round'; ctx.strokeStyle=c||'#000'; ctx.stroke();
+  }
+  function clearSlide(){ ctx.clearRect(0,0,cvs.width,cvs.height); }
 
   socket.on('slide_change', data => {
     idx = data.index || 0;
     slideEl.innerHTML = data.html || '';
     clearSlide();
   });
-  socket.on('draw', data => {
-    if (data.slide !== idx) return;
-    drawLine(data.x0, data.y0, data.x1, data.y1, data.w, data.c);
-  });
-  socket.on('clear', data => {
-    if (data.slide !== idx) return;
-    clearSlide();
+  socket.on('draw', data => { if (data.slide===idx) drawLine(data.x0, data.y0, data.x1, data.y1, data.w, data.c); });
+  socket.on('clear', data => { if (data.slide===idx) clearSlide(); });
+  socket.on('solution_reveal', data => {
+    // Falls Lehrer nur reveal toggelt ohne Slide-Wechsel
+    const el = slideEl.querySelector('.ex-solution');
+    if (!el) return;
+    if (data.reveal) el.classList.remove('d-none'); else el.classList.add('d-none');
   });
   socket.on('ended', () => {
     alert('Live-Session beendet');
-    // zurück zum Kurs
-    const parts = window.location.pathname.split('/'); parts.splice(-1,1);
-    window.location = parts.join('/');
+    window.location = `/courses/${courseId}`;
   });
 })();
 </script>
