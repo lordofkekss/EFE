@@ -7,18 +7,17 @@ from sqlalchemy import func
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
-from flask import (
-    render_template, request, redirect, url_for, flash, abort,
-    current_app, send_from_directory, jsonify, make_response
-)
+from flask import request, abort, jsonify, render_template, redirect, url_for, flash, current_app, send_from_directory, \
+    make_response
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
 from . import bp
+from .. import Config
 from ..extensions import db, csrf
 from ..models import (
     Subject, SubjectYear, Class, Enrollment,
-    ContentNode, Exercise, ExerciseItem, Submission, Document, StarTransaction, Document, LiveSession, gen_id
+    ContentNode, Exercise, ExerciseItem, Submission, Document, StarTransaction, Document, LiveSession, gen_id, User
 )
 
 ALLOWED_DOC_EXTS = {"pdf","png","jpg","jpeg","doc","docx","ppt","pptx","xls","xlsx","txt"}
@@ -180,10 +179,15 @@ def detail(course_id):
             .all())
     doc_paths = {d.id: (d.path or "").replace("\\", "/") for d in docs}
     export_docs = [d for d in docs if "/exports/" in (d.path or "")]
+    # Wenn Document.released existiert und Nutzer Schüler ist → nur freigegebene
+    if hasattr(Document, "released") and current_user.role == "student":
+        export_docs = [d for d in export_docs if d.released]
 
-    # Items bauen
+    # Items für Liste
     items = []
     for n in nodes:
+        if current_user.role == "student" and not getattr(n, "released", True):
+            continue
         kind = "exercise" if n.type == "exercise" else "section"
         oi = n.order_index if n.order_index is not None else 1_000_000
         items.append({
@@ -192,19 +196,24 @@ def detail(course_id):
         })
     items.sort(key=lambda it: (it.get("order_index", 1_000_000), (it.get("title") or "").lower()))
 
-    # Abschlusszählung: wie viele Schüler in der Klasse haben je Übung eine Abgabe ≠ draft
-    total_students = Enrollment.query.filter_by(class_id=course.class_id, role_in_class="student").count()
+    # Schüler der Klasse
+    student_ids = [e.user_id for e in Enrollment.query.filter_by(class_id=course.class_id, role_in_class="student").all()]
+    total_students = len(student_ids)
+
+    # Abschluss: DISTINCT Schüler je Übung (nur Klasse!)
     ex_ids = [it["id"] for it in items if it["kind"] == "exercise"]
-    counts = {}
-    if ex_ids:
-        rows = (db.session.query(Submission.assignment_id, func.count(Submission.id))
+    exercise_counts = {}
+    if ex_ids and student_ids:
+        rows = (db.session.query(Submission.assignment_id,
+                                 func.count(func.distinct(Submission.student_id)))
                 .filter(Submission.assignment_id.in_(ex_ids))
+                .filter(Submission.student_id.in_(student_ids))
                 .filter(Submission.status.in_(["submitted", "evaluated"]))
                 .group_by(Submission.assignment_id)
                 .all())
-        counts = {aid: cnt for (aid, cnt) in rows}
+        exercise_counts = {aid: cnt for (aid, cnt) in rows}
 
-    # Erledigt-Set für aktuellen User (Schüler/Admin)
+    # „Erledigt“-Set für aktuellen User
     completed_ids = set()
     if current_user.is_authenticated and current_user.role in ("student", "admin"):
         subs = Submission.query.filter_by(student_id=current_user.id).all()
@@ -217,11 +226,52 @@ def detail(course_id):
         doc_paths=doc_paths,
         export_docs=export_docs,
         total_students=total_students,
-        exercise_counts=counts,
+        exercise_counts=exercise_counts,
         completed_ids=completed_ids,
     )
 
+@bp.route("/<course_id>/content/<node_id>/release", methods=["POST"])
+@login_required
+def content_release(course_id, node_id):
+    course = db.session.get(SubjectYear, course_id)
+    if not course: abort(404)
+    if current_user.role not in ("teacher", "admin"): abort(403)
+    # Lehrer muss zur Klasse gehören, wenn nicht Admin
+    if current_user.role == "teacher":
+        if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id, role_in_class="teacher").first():
+            abort(403)
 
+    action = (request.form.get("action") or "").strip()
+    # ContentNode?
+    node = db.session.get(ContentNode, node_id)
+    if node and node.subject_year_id == course.id:
+        if not hasattr(node, "released"):
+            flash("Dieses Element unterstützt keine Freigabe.", "warning")
+            return redirect(url_for("courses.detail", course_id=course_id))
+        node.released = (action == "release")
+        db.session.commit()
+        flash(("Freigegeben" if node.released else "Gesperrt") + f": {node.title}", "success")
+        return redirect(url_for("courses.detail", course_id=course_id))
+
+    # Optional: Document freigeben (falls Formular dafür existiert)
+    doc = db.session.get(Document, node_id)
+    if doc and doc.subject_year_id == course.id and hasattr(Document, "released"):
+        doc.released = (action == "release")
+        db.session.commit()
+        flash(("Freigegeben" if doc.released else "Gesperrt") + f": {doc.title or doc.path}", "success")
+        return redirect(url_for("courses.detail", course_id=course_id))
+
+    abort(404)
+# ---------- Selfcheck ----------
+@bp.route("/<course_id>/diag")
+def diag(course_id):
+    from sqlalchemy import text
+    out = {}
+    out["live_sessions_cols"] = [r[1] for r in db.session.execute(text("PRAGMA table_info(live_sessions)"))]
+    out["exercises_cols"] = [r[1] for r in db.session.execute(text("PRAGMA table_info(exercises)"))]
+    out["exercise_items_cols"] = [r[1] for r in db.session.execute(text("PRAGMA table_info(exercise_items)"))]
+    out["content_nodes_cols"] = [r[1] for r in db.session.execute(text("PRAGMA table_info(content_nodes)"))]
+    return out
 
 # ---------- JSON: Live-Status (für Schüler-Button + initialer Slide) ----------
 @bp.route("/<course_id>/live/status")

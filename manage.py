@@ -19,7 +19,67 @@ def as_bool(val: str, default=False) -> bool:
         return default
     return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
+def maybe_reset_db(app):
+    """
+    DEV-Reset: Wenn DB_RESET=1 (oder true/yes/on), wird
+    - bei SQLite: die DB-Datei gelöscht
+    - bei PG/MySQL: alle Tabellen gedroppt
+    Danach: Alembic upgrade + optional Admin-Seed.
+    """
+    flag = os.getenv("DB_RESET", "0").lower() in {"1","true","yes","on"}
+    if not flag:
+        return
+
+    from flask_migrate import upgrade
+    from app.extensions import db
+    from sqlalchemy import text
+
+    uri = app.config["SQLALCHEMY_DATABASE_URI"]
+    print("━"*40)
+    print(f"DB reset: START (URI={uri})")
+
+    with app.app_context():
+        if uri.startswith("sqlite:///"):
+            db_path = uri.replace("sqlite:///", "")
+            try:
+                os.remove(db_path)
+                print(f"DB reset: SQLite-Datei gelöscht: {db_path}")
+            except FileNotFoundError:
+                print(f"DB reset: SQLite-Datei nicht vorhanden: {db_path}")
+        else:
+            # hart droppen (nur DEV!)
+            print("DB reset: versuche drop_all()")
+            db.reflect()
+            db.drop_all()
+            db.session.commit()
+            # evtl. verbleibende Migrations-Tabellen entfernen
+            try:
+                db.session.execute(text("DROP TABLE IF EXISTS alembic_version"))
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                print("DB reset: alembic_version drop fehlgeschlagen:", e)
+
+        # frische Migrationen anwenden
+        upgrade()
+        print("DB reset: Alembic upgrade done.")
+
+        # Admin-Seed (optional)
+        if os.getenv("SEED_ADMIN", "1").lower() in {"1","true","yes","on"}:
+            from app.models import User
+            from passlib.hash import bcrypt
+            if not User.query.filter_by(username="admin").first():
+                admin_pw = os.getenv("ADMIN_PASSWORD", "admin")
+                admin = User(username="admin", email="admin@example.com",
+                             role="admin", password_hash=bcrypt.hash(admin_pw))
+                db.session.add(admin); db.session.commit()
+                print("DB reset: Admin angelegt (user=admin)")
+    print("DB reset: DONE")
+    print("━"*40)
+
+
 app = create_app()
+maybe_reset_db(app)
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")

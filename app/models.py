@@ -61,6 +61,7 @@ class ContentNode(db.Model):
     approved_at = db.Column(db.DateTime)
 
     released_at = db.Column(db.DateTime, nullable=True)
+    released = db.Column(db.Boolean, default=False)  # sichtbar für Schüler nur wenn True
     release_order = db.Column(db.Integer, default=0)
 
     __table_args__ = (
@@ -212,4 +213,5 @@ class Document(db.Model):
     mime_type = db.Column(db.String, nullable=True)
     uploaded_by = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    released = db.Column(db.Boolean, default=True)  # Dateien standardmäßig sichtbar
     order_index = db.Column(db.Integer, default=0)            # NEU: für gemischte Liste
