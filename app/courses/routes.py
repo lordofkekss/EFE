@@ -2,6 +2,10 @@ import os, re, uuid, base64, random
 from io import BytesIO
 from datetime import datetime as dt
 from bs4 import BeautifulSoup
+from PIL import Image
+from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
 from flask import (
     render_template, request, redirect, url_for, flash, abort,
     current_app, send_from_directory, jsonify, make_response
@@ -13,7 +17,7 @@ from . import bp
 from ..extensions import db, csrf
 from ..models import (
     Subject, SubjectYear, Class, Enrollment,
-    ContentNode, Exercise, Document, StarTransaction, LiveSession, gen_id
+    ContentNode, Exercise, Submission, Document, StarTransaction, Document, LiveSession, gen_id
 )
 
 ALLOWED_DOC_EXTS = {"pdf","png","jpg","jpeg","doc","docx","ppt","pptx","xls","xlsx","txt"}
@@ -160,40 +164,74 @@ def manage():
 @bp.route("/<course_id>")
 @login_required
 def detail(course_id):
+    import os
     course = db.session.get(SubjectYear, course_id)
-    if not course: abort(404)
+    if not course:
+        abort(404)
     if current_user.role != "admin":
         if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id).first():
             abort(403)
 
-    nodes = _sorted_nodes_for_course(course.id, include_unreleased_for_teacher=(current_user.role!="student"))
-    docs = Document.query.filter_by(subject_year_id=course.id)\
-            .order_by(Document.order_index.asc(), Document.uploaded_at.asc()).all()
+    # Nodes (Abschnitte/Übungen) – Helper filtert unreleased für Schüler raus
+    nodes = _sorted_nodes_for_course(
+        course.id,
+        include_unreleased_for_teacher=(current_user.role != "student")
+    )
+
+    # Dateien (Downloads) für den Kurs
+    docs = Document.query.filter_by(subject_year_id=course.id) \
+        .order_by(Document.order_index.asc().nullsLast(), Document.uploaded_at.asc()) \
+        .all()
 
     items, doc_paths = [], {}
-    fallback_counter = 0
-    def norm_index(val):
-        nonlocal fallback_counter
-        try:
-            return int(val)
-        except (TypeError, ValueError):
-            fallback = 1_000_000 + fallback_counter; fallback_counter += 1; return fallback
+    seq = 0  # Fallback-Sequenz, wenn order_index fehlt
 
+    # Inhalte (Abschnitte/Übungen) einsortieren
     for n in nodes:
-        items.append({"kind": n.type if n.type!="lesson" else "section",
-                      "id": n.id, "title": n.title or "",
-                      "order": norm_index(n.order_index), "released": bool(getattr(n, "released_at", None))})
+        kind = "exercise" if n.type == "exercise" else "section"
+        oi = n.order_index if n.order_index is not None else (1_000_000 + seq)
+        seq += 1
+        items.append({
+            "id": n.id,
+            "kind": kind,
+            "title": n.title or "(Ohne Titel)",
+            "order_index": oi,
+            "released": bool(getattr(n, "released", True)),
+        })
+
+    # Dateien einsortieren (mit Pfad)
     for d in docs:
-        items.append({"kind": "file", "id": d.id, "title": d.filename or "Datei",
-                      "order": norm_index(d.order_index), "released": True})
-        doc_paths[d.id] = d.path
+        path = (d.path or "").replace("\\", "/")
+        doc_paths[d.id] = path
+        oi = d.order_index if getattr(d, "order_index", None) is not None else (1_000_000 + seq)
+        seq += 1
+        items.append({
+            "id": d.id,
+            "kind": "file",
+            "title": (d.title or os.path.basename(path) or "Datei"),
+            "order_index": oi,
+            "released": bool(getattr(d, "released", True)),
+        })
 
-    items.sort(key=lambda x: (x["order"], x["title"]))
-    types = ["section","exercise"]; kinds = ["mc","short_answer"]
+    # stabile Sortierung: erst order_index, dann Titel
+    items.sort(key=lambda it: (it.get("order_index", 1_000_000), (it.get("title") or "").lower()))
 
-    return render_template("courses/detail.html",
-                           course=course, items=items, doc_paths=doc_paths,
-                           types=types, kinds=kinds)
+    # Erledigte Übungen (für Schüler/ Admin-Anzeige)
+    completed_ids = set()
+    if current_user.is_authenticated and current_user.role in ("student", "admin"):
+        subs = Submission.query.filter_by(student_id=current_user.id).all()
+        for s in subs:
+            if getattr(s, "assignment_id", None):
+                completed_ids.add(s.assignment_id)
+
+    return render_template(
+        "courses/detail.html",
+        course=course,
+        items=items,
+        doc_paths=doc_paths,
+        completed_ids=completed_ids,
+    )
+
 
 # ---------- JSON: Live-Status (für Schüler-Button + initialer Slide) ----------
 @bp.route("/<course_id>/live/status")
@@ -286,6 +324,70 @@ def live_join_by_code():
         if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id).first():
             abort(403)
     return redirect(url_for("courses.live_join", course_id=sess.course_id))
+
+# ---------- PDF Export ----------
+@bp.route("/<course_id>/live/export", methods=["POST"])
+@login_required
+def live_export(course_id):
+    course = db.session.get(SubjectYear, course_id)
+    if not course: abort(404)
+    # nur Lehrkraft/Admin
+    if current_user.role not in ("teacher","admin"): abort(403)
+    if current_user.role != "admin":
+        if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id, role_in_class="teacher").first():
+            abort(403)
+
+    data = request.get_json(silent=True) or {}
+    images = data.get("images", [])
+    if not images:
+        return jsonify({"ok": False, "error": "no images"}), 400
+
+    # Pfad vorbereiten
+    upload_root = current_app.config.get("UPLOAD_FOLDER", os.path.join(current_app.root_path, "uploads"))
+    rel_dir = os.path.join(str(course.id), "exports")
+    abs_dir = os.path.abspath(os.path.join(upload_root, rel_dir))
+    os.makedirs(abs_dir, exist_ok=True)
+
+    # PDF bauen
+    filename = f"live_export_{dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+    abs_pdf = os.path.join(abs_dir, filename)
+
+    c = pdf_canvas.Canvas(abs_pdf, pagesize=A4)
+    pw, ph = A4
+    margin = 36  # 0.5"
+    avail_w, avail_h = pw - 2*margin, ph - 2*margin
+
+    for dataurl in images:
+        try:
+            header, b64 = dataurl.split(",", 1)
+        except ValueError:
+            continue
+        raw = base64.b64decode(b64)
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        iw, ih = img.size
+        # fit to page
+        scale = min(avail_w/iw, avail_h/ih)
+        tw, th = iw*scale, ih*scale
+        x = (pw - tw)/2
+        y = (ph - th)/2
+        c.drawImage(ImageReader(img), x, y, tw, th)
+        c.showPage()
+    c.save()
+
+    # Document speichern
+    rel_pdf = f"{course.id}/exports/{filename}"
+    doc = Document(
+        id=gen_id(),
+        course_id=course.id,
+        owner_user_id=current_user.id,
+        title=f"Export {dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+        path=rel_pdf,
+        mime="application/pdf"
+    )
+    db.session.add(doc); db.session.commit()
+
+    return jsonify({"ok": True, "pdf_url": f"/courses/files/{rel_pdf}"}), 200
+
 
 # ---------- Inhalte anlegen ----------
 @bp.route("/<course_id>/content/create", methods=["POST"])
@@ -409,16 +511,53 @@ def section_pdf(course_id, node_id):
     return resp
 
 # ---------- Übungen ----------
-@bp.route("/<course_id>/exercise/<node_id>")
+@bp.route("/<course_id>/exercise/<node_id>", methods=["GET", "POST"])
 @login_required
 def exercise_view(course_id, node_id):
-    n = db.session.get(ContentNode, node_id)
-    if not n or n.subject_year_id != course_id or n.type != "exercise": abort(404)
-    ex = Exercise.query.filter_by(content_node_id=n.id).first()
+    node = db.session.get(ContentNode, node_id)
+    if not node or node.subject_year_id != course_id or node.type != "exercise":
+        abort(404)
+
+    # Zugriffsrecht: eingeschrieben
+    course = db.session.get(SubjectYear, course_id)
     if current_user.role != "admin":
-        course = db.session.get(SubjectYear, course_id)
-        if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id).first(): abort(403)
-    return render_template("courses/exercise.html", course_id=course_id, node=n, ex=ex)
+        if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id).first():
+            abort(403)
+
+    ex = Exercise.query.filter_by(content_node_id=node.id).first()
+    if not ex:
+        # leere Übung
+        ex = Exercise(id=gen_id(), content_node_id=node.id, kind="short_answer", prompt_md="(Noch keine Aufgabe)")
+        db.session.add(ex); db.session.commit()
+
+    # Vorhandene Abgabe?
+    sub = Submission.query.filter_by(student_id=current_user.id, assignment_id=node.id).first()
+
+    if request.method == "POST":
+        # Schülerantwort speichern
+        if current_user.role not in ("student","admin"):
+            abort(403)
+        answer_text = (request.form.get("answer_text") or "").strip()
+        if not sub:
+            sub = Submission(id=gen_id(), assignment_id=node.id, student_id=current_user.id,
+                             answer_json={"text": answer_text}, status="submitted", attempts_count=1)
+            db.session.add(sub)
+        else:
+            sub.answer_json = {"text": answer_text}
+            sub.status = "submitted"
+            sub.attempts_count = (sub.attempts_count or 0) + 1
+        db.session.commit()
+
+        # einfache Sterne-Gutschrift (einmalig pro Übung)
+        already = StarTransaction.query.filter_by(user_id=current_user.id, assignment_id=node.id, reason="submission").first()
+        if not already:
+            st = StarTransaction(id=gen_id(), user_id=current_user.id, assignment_id=node.id, amount=1, reason="submission", created_by=None)
+            db.session.add(st); db.session.commit()
+        flash("Antwort gespeichert. Du bekommst einen Stern für die Abgabe.", "success")
+        return redirect(url_for("courses.detail", course_id=course_id))
+
+    return render_template("courses/exercise.html", course=course, node=node, ex=ex, sub=sub)
+
 
 @bp.route("/<course_id>/exercise/<node_id>/submit", methods=["POST"])
 @login_required

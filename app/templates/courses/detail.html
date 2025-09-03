@@ -1,130 +1,186 @@
+<!-- app/templates/courses/detail.html -->
 {% extends 'base.html' %}
-{% block title %}Kurs{% endblock %}
+{% block title %}Kurs – Details{% endblock %}
+
 {% block content %}
-<h4 class="mb-3">Kurs</h4>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">
+    Kurs
+    {% if course and course.school_year %}<small class="text-muted">({{ course.school_year }})</small>{% endif %}
+  </h4>
 
-{% if current_user.role in ['teacher','admin'] %}
-<div class="card mb-3">
-    <div class="card-body">
-        <h6 class="card-title">Neues Element</h6>
-        <form method="post" action="/courses/{{ course.id }}/content/create" class="row g-2">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="col-3">
-                <select name="type" class="form-select" required>
-                    <option value="section">Abschnitt</option>
-                    <option value="exercise">Übung</option>
-                </select>
-            </div>
-            <div class="col-5"><input class="form-control" name="title" placeholder="Titel" required></div>
-            <div class="col-2"><input class="form-control" type="number" name="order_index" value=""></div>
-            <div class="col-2">
-                <button class="btn btn-primary w-100">Anlegen</button>
-            </div>
-            <div class="col-12"><textarea class="form-control" name="body_md" rows="2"
-                                          placeholder="Beschreibung (optional)"></textarea></div>
-        </form>
-
-        <form method="post" action="/courses/{{ course.id }}/upload" enctype="multipart/form-data" class="mt-3">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="input-group">
-                <input type="file" name="file" class="form-control" required>
-                <button class="btn btn-outline-primary">Datei hochladen</button>
-            </div>
-        </form>
-    </div>
-</div>
-{% endif %}
-
-<ul class="list-group" id="mix-list">
-    {% for it in items %}
-    <li class="list-group-item d-flex justify-content-between align-items-center"
-        data-type="{{ 'doc' if it.kind=='file' else 'node' }}" data-id="{{ it.id }}">
-        <div>
-        <span class="badge {{ 'bg-primary' if it.kind=='section' else ('bg-info' if it.kind=='exercise' else 'bg-secondary') }}">
-          {{ 'Abschnitt' if it.kind=='section' else ('Übung' if it.kind=='exercise' else 'Datei') }}
-        </span>
-            <span class="ms-2">{{ it.title }}</span>
-            {% if it.released %}<span class="badge bg-success ms-2">freigegeben</span>{% endif %}
-        </div>
-        <div class="btn-group">
-            {% if it.kind=='section' %}
-            <a class="btn btn-sm btn-outline-primary"
-               href="/courses/{{ course.id }}/section/{{ it.id }}/view">Ansehen</a>
-            {% if current_user.role in ['teacher','admin'] %}
-            <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/section/{{ it.id }}/edit">Bearbeiten</a>
-            <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/section/{{ it.id }}/pdf">PDF</a>
-            <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline ms-1">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                {% if it.released %}<input type="hidden" name="action" value="unrelease">
-                <button class="btn btn-sm btn-warning">Sperren</button>
-                {% else %}<input type="hidden" name="action" value="release">
-                <button class="btn btn-sm btn-success">Freigeben</button>
-                {% endif %}
-            </form>
-            {% endif %}
-            {% elif it.kind=='exercise' %}
-            <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/exercise/{{ it.id }}">Öffnen</a>
-            {% if current_user.role in ['teacher','admin'] %}
-            <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/exercise/{{ it.id }}/edit">Bearbeiten</a>
-            <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline ms-1">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                {% if it.released %}
-                <input type="hidden" name="action" value="unrelease">
-                <button class="btn btn-sm btn-warning">Sperren</button>
-                {% else %}
-                <input type="hidden" name="action" value="release">
-                <button class="btn btn-sm btn-success">Freigeben</button>
-                {% endif %}
-            </form>
-            {% endif %}
-
-        </div>
-    </li>
-    {% endfor %}
-</ul>
-
-<div class="mt-4 d-flex gap-2">
+  <div class="d-flex align-items-center gap-2">
     {% if current_user.role in ['teacher','admin'] %}
-    <a class="btn btn-outline-primary" href="/courses/{{ course.id }}/live">Live-Modus starten</a>
-    <div class="text-muted small">Zeige den Schülern nur den Beitritts-Code (sichtbar im Live-Modus).</div>
-    {% else %}
-    <a id="joinBtn" class="btn btn-primary d-none" href="/courses/{{ course.id }}/live/join">Live-Session beitreten</a>
-    <form class="d-inline-flex align-items-center ms-2" action="/courses/live/join_by_code" method="get">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input class="form-control form-control-sm me-2" name="code" placeholder="Code eingeben">
-        <button class="btn btn-outline-secondary btn-sm">Beitreten</button>
-    </form>
+      <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/live">Live starten/öffnen</a>
     {% endif %}
+    {% if current_user.role == 'student' %}
+      <a id="btn-join" class="btn btn-sm btn-success d-none" href="/courses/{{ course.id }}/live/join">Live-Session beitreten</a>
+      <span id="live-off" class="badge bg-secondary">keine Live-Session</span>
+    {% endif %}
+  </div>
 </div>
 
-{% if current_user.role in ['teacher','admin'] %}
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">Inhalte</h5>
+
+        {% if items and items|length > 0 %}
+          <ul class="list-group">
+            {% for it in items %}
+              <li class="list-group-item d-flex justify-content-between align-items-center">
+                <div class="me-2">
+                  {% if it.kind == 'section' %}
+                    <span class="badge bg-primary me-2">Abschnitt</span>
+                    <strong>{{ it.title }}</strong>
+                  {% elif it.kind == 'exercise' %}
+                    <span class="badge bg-info text-dark me-2">Übung</span>
+                    <strong>{{ it.title }}</strong>
+                  {% elif it.kind == 'file' %}
+                    <span class="badge bg-secondary me-2">Datei</span>
+                    <strong>{{ it.title }}</strong>
+                  {% else %}
+                    <span class="badge bg-light text-dark me-2">{{ it.kind|default('Inhalt') }}</span>
+                    <strong>{{ it.title }}</strong>
+                  {% endif %}
+                </div>
+
+                <div class="d-flex align-items-center gap-2">
+                  {% if it.kind == 'section' %}
+                    <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/section/{{ it.id }}/view">Öffnen</a>
+                    {% if current_user.role in ['teacher','admin'] %}
+                      <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/section/{{ it.id }}/edit">Bearbeiten</a>
+                      <a class="btn btn-sm btn-outline-success" href="/courses/{{ course.id }}/section/{{ it.id }}/pdf">Als PDF</a>
+                      <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        {% if it.released %}
+                          <input type="hidden" name="action" value="unrelease">
+                          <button class="btn btn-sm btn-warning">Sperren</button>
+                        {% else %}
+                          <input type="hidden" name="action" value="release">
+                          <button class="btn btn-sm btn-success">Freigeben</button>
+                        {% endif %}
+                      </form>
+                    {% endif %}
+                    {% elif it.kind == 'exercise' %}
+                      <span class="badge {{ 'bg-success' if it.id in completed_ids else 'bg-light text-dark' }}">
+                        {{ 'Erledigt' if it.id in completed_ids else 'Offen' }}
+                      </span>
+                      <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/exercise/{{ it.id }}">Öffnen</a>
+                      {% if current_user.role in ['teacher','admin'] %}
+                        <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/exercise/{{ it.id }}/edit">Bearbeiten</a>
+                        <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          {% if it.released %}
+                            <input type="hidden" name="action" value="unrelease">
+                            <button class="btn btn-sm btn-warning">Sperren</button>
+                          {% else %}
+                            <input type="hidden" name="action" value="release">
+                            <button class="btn btn-sm btn-success">Freigeben</button>
+                          {% endif %}
+                        </form>
+                      {% endif %}
+                  {% elif it.kind == 'file' %}
+                    {% set path = doc_paths.get(it.id) %}
+                    {% if path %}
+                      <a class="btn btn-sm btn-outline-primary" href="/courses/files/{{ path }}" target="_blank">Download</a>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="text-muted">Noch keine Inhalte.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if current_user.role in ['teacher','admin'] %}
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">Neuen Inhalt anlegen</h5>
+        <form method="post" action="/courses/{{ course.id }}/content/create">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-2">
+            <label class="form-label">Typ</label>
+            <select name="type" class="form-select">
+              <option value="section">Abschnitt</option>
+              <option value="exercise">Übung</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Titel</label>
+            <input name="title" class="form-control" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Reihenfolge (Zahl, optional)</label>
+            <input name="order_index" class="form-control" placeholder="z. B. 10">
+          </div>
+
+          <div id="section-fields" class="mb-2">
+            <label class="form-label">Inhalt (Markdown/HTML, optional)</label>
+            <textarea name="body_md" class="form-control" rows="4"></textarea>
+          </div>
+
+          <div id="exercise-fields" class="mb-2 d-none">
+            <label class="form-label">Aufgabenstellung (Markdown/kurz)</label>
+            <textarea name="prompt_md" class="form-control" rows="4"></textarea>
+            <label class="form-label mt-2">Art</label>
+            <select name="kind" class="form-select">
+              <option value="short_answer">Kurzantwort</option>
+              <option value="mc">Multiple Choice</option>
+              <option value="rich">Rich (Editor)</option>
+            </select>
+          </div>
+
+          <button class="btn btn-primary mt-2">Anlegen</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% if current_user.role == 'student' %}
 <script>
-    new Sortable(document.getElementById('mix-list'), {
-      animation: 150,
-      onEnd: function() {
-        const order = [...document.querySelectorAll('#mix-list li')].map((li, idx) => ({
-          type: li.dataset.type, id: li.dataset.id, index: idx
-        }));
-        fetch('/courses/{{ course.id }}/reorder_mix', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({order})
-        });
+(function(){
+  async function poll(){
+    try{
+      const r = await fetch('/courses/{{ course.id }}/live/status', {cache:'no-store'});
+      const j = await r.json();
+      const btn = document.getElementById('btn-join');
+      const off = document.getElementById('live-off');
+      if(j.active){
+        btn.classList.remove('d-none');
+        off.classList.add('d-none');
+      }else{
+        btn.classList.add('d-none');
+        off.classList.remove('d-none');
       }
-    });
-</script>
-{% else %}
-<script>
-    // Polling: nur Button anzeigen, wenn Session aktiv
-    async function checkLive() {
-      try {
-        const r = await fetch('/courses/{{ course.id }}/live/status');
-        const j = await r.json();
-        const btn = document.getElementById('joinBtn');
-        if (j.active) { btn.classList.remove('d-none'); } else { btn.classList.add('d-none'); }
-      } catch (e) {}
-    }
-    checkLive(); setInterval(checkLive, 5000);
+    }catch(e){}
+  }
+  poll();
+  setInterval(poll, 5000);
+})();
 </script>
 {% endif %}
+
+<script>
+(function(){
+  // kleines UI-Flip zwischen Abschnitt/Übung Formularfeldern
+  const sel = document.querySelector('select[name="type"]');
+  if(!sel) return;
+  const sec = document.getElementById('section-fields');
+  const ex  = document.getElementById('exercise-fields');
+  sel.addEventListener('change', ()=>{
+    const v = sel.value;
+    if(v === 'exercise'){ ex.classList.remove('d-none'); sec.classList.add('d-none'); }
+    else { sec.classList.remove('d-none'); ex.classList.add('d-none'); }
+  });
+})();
+</script>
 {% endblock %}

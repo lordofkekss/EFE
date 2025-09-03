@@ -21,18 +21,22 @@ def _slide_html_for_node(node: ContentNode, revealed_ids: list) -> str:
     """Erzeuge HTML für Abschnitt/Übung. Lösung nur, wenn ge-revealed."""
     if node.type == "exercise":
         ex = Exercise.query.filter_by(content_node_id=node.id).first()
-        prompt = (ex.prompt_html or ex.prompt_md or "")
-        solution = (ex.solution_html or "")
+        if not ex:
+            return "<div class='alert alert-warning'>Diese Übung hat noch keinen Inhalt.</div>"
+        prompt = (ex.prompt_html or ex.prompt_md or "").strip()
+        solution = (ex.solution_html or "").strip()
         show_solution = node.id in (revealed_ids or [])
-        return f"""
-        <div class='ex-wrapper' data-node-id='{node.id}'>
-          <div class='ex-prompt'>{prompt}</div>
-          <div class='ex-solution {"": if show_solution else "d-none"}'>
-            <hr><div class='alert alert-success'><strong>Lösung:</strong></div>
-            {solution}
-          </div>
-        </div>
-        """
+        # Klasse "d-none" nur setzen, wenn Lösung versteckt bleiben soll
+        solution_class = "" if show_solution else "d-none"
+        return (
+            f"<div class='ex-wrapper' data-node-id='{node.id}'>"
+            f"  <div class='ex-prompt'>{prompt}</div>"
+            f"  <div class='ex-solution {solution_class}'>"
+            f"    <hr><div class='alert alert-success'><strong>Lösung:</strong></div>"
+            f"    {solution}"
+            f"  </div>"
+            f"</div>"
+        )
     # Abschnitt
     return (node.body_html or node.body_md or "")
 
@@ -80,8 +84,12 @@ def on_slide_change(data):
         return
     sess.current_slide = idx
     db.session.commit()
-    # HTML wird serverseitig gebaut → garantiert konsistent, inkl. reveal-state
-    emit("slide_change", _current_slide_payload(sess), to=_room(session_id), include_self=False)
+
+    payload = _current_slide_payload(sess)
+    # an alle anderen broadcasten …
+    emit("slide_change", payload, to=_room(session_id), include_self=False)
+    # … und dem Sender die Antwort für den Emit-Callback zurückgeben
+    return payload
 
 @socketio.on("draw")
 def on_draw(data):

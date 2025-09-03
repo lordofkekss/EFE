@@ -5,8 +5,10 @@
 
 <h4 class="mb-3">Live-Session</h4>
 <div class="card"><div class="card-body">
-  <div id="slide-content" class="mb-2" style="min-height:120px;"></div>
-  <canvas id="wb" width="1200" height="800" class="border w-100" style="aspect-ratio:3/2;"></canvas>
+  <div id="slide-wrap" class="position-relative border rounded p-3" style="min-height:300px;">
+    <div id="slide-content"></div>
+    <canvas id="overlay" class="position-absolute top-0 start-0" style="width:100%;height:100%;pointer-events:none;"></canvas>
+  </div>
   <div class="mt-2 text-muted small">Die Lehrkraft steuert die Präsentation.</div>
 </div></div>
 
@@ -17,11 +19,20 @@
   const socket = io({ path: "/socket.io" });
 
   const slideEl = document.getElementById('slide-content');
-  const cvs = document.getElementById('wb');
-  const ctx = cvs.getContext('2d');
-  let idx = 0;
+  const wrapEl  = document.getElementById('slide-wrap');
+  const cvs     = document.getElementById('overlay');
+  const ctx     = cvs.getContext('2d');
 
-  socket.emit('join_live', {session_id: sessionId, role: 'student'});
+  function resizeCanvas(){
+    const r = wrapEl.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    cvs.width = Math.max(1, Math.floor(r.width * dpr));
+    cvs.height = Math.max(1, Math.floor(r.height * dpr));
+    cvs.style.width = r.width + 'px';
+    cvs.style.height = r.height + 'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  new ResizeObserver(resizeCanvas).observe(wrapEl);
 
   function drawLine(x0,y0,x1,y1,w,c){
     ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1);
@@ -29,15 +40,15 @@
   }
   function clearSlide(){ ctx.clearRect(0,0,cvs.width,cvs.height); }
 
+  socket.emit('join_live', {session_id: sessionId, role: 'student'});
+
   socket.on('slide_change', data => {
-    idx = data.index || 0;
     slideEl.innerHTML = data.html || '';
-    clearSlide();
+    setTimeout(()=>{ resizeCanvas(); clearSlide(); }, 0);
   });
-  socket.on('draw', data => { if (data.slide===idx) drawLine(data.x0, data.y0, data.x1, data.y1, data.w, data.c); });
-  socket.on('clear', data => { if (data.slide===idx) clearSlide(); });
+  socket.on('draw', data => { drawLine(data.x0, data.y0, data.x1, data.y1, data.w, data.c); });
+  socket.on('clear', () => clearSlide());
   socket.on('solution_reveal', data => {
-    // Falls Lehrer nur reveal toggelt ohne Slide-Wechsel
     const el = slideEl.querySelector('.ex-solution');
     if (!el) return;
     if (data.reveal) el.classList.remove('d-none'); else el.classList.add('d-none');

@@ -2,16 +2,34 @@
 {% block title %}Übung{% endblock %}
 {% block content %}
 <h4 class="mb-3">Übung: {{ node.title }}</h4>
-<form method="post" action="/courses/{{ course_id }}/exercise/{{ node.id }}/submit">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="mb-3">
-    <label class="form-label">Aufgabe</label>
-    <div class="p-2 border rounded bg-light">{{ ex.prompt_md }}</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="mb-2">
+      {{ (ex.prompt_html or ex.prompt_md) | safe }}
+    </div>
+    {% if current_user.role == 'student' %}
+      <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="form-label">Deine Antwort</label>
+        <textarea class="form-control" name="answer_text" rows="5">{{ (sub.answer_json.text if sub and sub.answer_json) or '' }}</textarea>
+        <div class="mt-2 d-flex gap-2">
+          <button class="btn btn-primary">Abgeben</button>
+          <a class="btn btn-outline-secondary" href="/courses/{{ course.id }}">Zurück</a>
+        </div>
+      </form>
+    {% else %}
+      <div class="alert alert-info mb-0">Nur Schüler können eine Antwort eingeben.</div>
+    {% endif %}
   </div>
-  <div class="mb-3">
-    <label class="form-label">Antwort</label>
-    <textarea class="form-control" name="answer" rows="3" required></textarea>
+</div>
+
+{% if ex.solution_html %}
+<div class="card">
+  <div class="card-body">
+    <div class="alert alert-success py-2 mb-2"><strong>Lösung (sichtbar, wenn im Live-Modus freigegeben):</strong></div>
+    <div class="ex-solution">{{ ex.solution_html | safe }}</div>
   </div>
-  <button class="btn btn-primary">Abgeben</button>
-</form>
+</div>
+{% endif %}
 {% endblock %}

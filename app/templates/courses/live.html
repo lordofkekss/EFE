@@ -2,6 +2,7 @@
 {% block title %}Live-Modus (Lehrer){% endblock %}
 {% block content %}
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" crossorigin="anonymous"></script>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h4 class="mb-0">Live-Modus</h4>
@@ -15,11 +16,14 @@
   <div class="col-lg-3">
     <div class="list-group" id="slides-list" style="max-height:70vh;overflow:auto;">
       {% for s in slides %}
-        <a href="#" class="list-group-item list-group-item-action slide-link" data-idx="{{ loop.index0 }}">
-          <span class="badge {{ 'bg-info' if s.type=='exercise' else 'bg-primary' }}">
-            {{ 'Übung' if s.type=='exercise' else 'Abschnitt' }}
+        <a href="#" class="list-group-item list-group-item-action slide-link d-flex justify-content-between align-items-center" data-idx="{{ loop.index0 }}">
+          <span>
+            <span class="badge {{ 'bg-info text-dark' if s.type=='exercise' else 'bg-primary' }}">
+              {{ 'Übung' if s.type=='exercise' else 'Abschnitt' }}
+            </span>
+            <span class="ms-2">{{ s.title }}</span>
           </span>
-          <span class="ms-2">{{ s.title }}</span>
+          <span class="text-muted small">#{{ loop.index }}</span>
         </a>
       {% else %}
         <div class="text-muted small">Keine Inhalte.</div>
@@ -45,18 +49,22 @@
             <input class="form-check-input" type="checkbox" id="drawToggle">
             <label class="form-check-label" for="drawToggle">Zeichnen aktiv</label>
           </div>
-          <input type="color" id="color" value="#000000" class="form-control form-control-color">
+          <input type="color" id="color" value="#ff0000" class="form-control form-control-color">
           <select id="width" class="form-select form-select-sm" style="width:auto;">
-            <option>2</option><option>4</option><option>6</option><option>8</option><option>12</option>
+            <option>2</option><option selected>4</option><option>6</option><option>8</option><option>12</option>
           </select>
           <button id="clear" class="btn btn-warning btn-sm">Seite löschen</button>
-          <button id="end" class="btn btn-danger btn-sm">Beenden</button>
+          <button id="end" class="btn btn-danger btn-sm">Beenden & PDF</button>
         </div>
       </div>
 
-      <div id="slide-content" class="mb-2" style="min-height:120px;"></div>
-      <canvas id="wb" width="1200" height="800" class="border w-100"
-              style="aspect-ratio:3/2; touch-action:none;"></canvas>
+      <!-- Zeichenbare Fläche: ganzer Slide -->
+      <div id="slide-wrap" class="position-relative border rounded p-3" style="min-height:300px;">
+        <div id="slide-content"></div>
+        <!-- Overlay-Canvas (100% über dem Inhalt) -->
+        <canvas id="overlay" class="position-absolute top-0 start-0" style="width:100%;height:100%;pointer-events:none;"></canvas>
+      </div>
+      <div class="form-text">Tipp: Zoome den Browser auf 90–110%, um mehr Platz zu haben.</div>
     </div></div>
   </div>
 </div>
@@ -70,90 +78,178 @@
   const slides = {{ slides|tojson }};
   let idx = 0;
 
-  const slideEl = document.getElementById('slide-content');
-  const list = document.getElementById('slides-list');
-
-  const toggle = document.getElementById('drawToggle');
-  const cvs = document.getElementById('wb');
-  const ctx = cvs.getContext('2d');
-  const color = document.getElementById('color');
-  const width = document.getElementById('width');
+  const slideEl  = document.getElementById('slide-content');
+  const wrapEl   = document.getElementById('slide-wrap');
+  const cvs      = document.getElementById('overlay');
+  const ctx      = cvs.getContext('2d');
   const exControls = document.getElementById('exercise-controls');
   const btnReveal = document.getElementById('reveal');
   const btnHide   = document.getElementById('hide');
+  const color   = document.getElementById('color');
+  const width   = document.getElementById('width');
+  const toggle  = document.getElementById('drawToggle');
 
+  // Zeichen-Puffer pro Slide (DataURL)
+  const buf = new Map();
   let drawing=false, last=null;
 
-  socket.emit('join_live', {session_id: sessionId, role: 'teacher'});
+  function resizeCanvasToWrap(){
+    // Canvas physisch an die CSS-Größe anpassen
+    const r = wrapEl.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    cvs.width = Math.max(1, Math.floor(r.width * dpr));
+    cvs.height = Math.max(1, Math.floor(r.height * dpr));
+    cvs.style.width = r.width + 'px';
+    cvs.style.height = r.height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    restoreBuf();
+  }
+  new ResizeObserver(resizeCanvasToWrap).observe(wrapEl);
+  window.addEventListener('orientationchange', ()=>setTimeout(resizeCanvasToWrap, 200));
 
-  // Navigation
-  list.querySelectorAll('.slide-link').forEach(a => {
-    a.addEventListener('click', (e) => { e.preventDefault(); idx = parseInt(a.dataset.idx||'0'); sendSlide(); });
-  });
-  document.getElementById('prev').onclick = () => { if (idx>0){ idx--; sendSlide();} };
-  document.getElementById('next').onclick = () => { if (idx<slides.length-1){ idx++; sendSlide();} };
+  function pageToCanvasXY(evt){
+    const rect = cvs.getBoundingClientRect();
+    const x = (evt.clientX ?? (evt.touches?.[0]?.clientX)) - rect.left;
+    const y = (evt.clientY ?? (evt.touches?.[0]?.clientY)) - rect.top;
+    return [x, y];
+  }
 
-  // Zeichnen
+  function draw(x0,y0,x1,y1,w,c,b){
+    ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1);
+    ctx.lineWidth = w; ctx.lineCap='round'; ctx.strokeStyle=c||'#f00'; ctx.stroke();
+    if (b) socket.emit('draw', {session_id: sessionId, slide: idx, x0,y0,x1,y1,w,c});
+  }
+  function clearOverlay(b){
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    if (b) socket.emit('clear', {session_id: sessionId, slide: idx});
+    saveBuf();
+  }
+  function saveBuf(){ try{ buf.set(idx, cvs.toDataURL('image/png')); }catch(e){} }
+  function restoreBuf(){
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    const imgData = buf.get(idx);
+    if (!imgData) return;
+    const img = new Image();
+    img.onload = ()=> ctx.drawImage(img, 0, 0, cvs.width, cvs.height);
+    img.src = imgData;
+  }
+
+  // Pointer-Events nur aktiv, wenn Toggle on
+  function setPointerMode(){
+    cvs.style.pointerEvents = toggle.checked ? 'auto' : 'none';
+  }
+  toggle.addEventListener('change', setPointerMode);
+  setPointerMode();
+
   ['pointerdown','pointermove','pointerup','pointerleave','touchstart','touchmove','touchend'].forEach(ev=>{
     cvs.addEventListener(ev, e=>{
       if (!toggle.checked) return;
       e.preventDefault();
-      const rect = cvs.getBoundingClientRect();
-      const x = (e.clientX ?? (e.touches?.[0]?.clientX)) - rect.left;
-      const y = (e.clientY ?? (e.touches?.[0]?.clientY)) - rect.top;
+      const [x, y] = pageToCanvasXY(e);
       if (ev==='pointerdown' || ev==='touchstart'){ drawing=true; last=[x,y]; return; }
-      if ((ev==='pointerup'||ev==='pointerleave'||ev==='touchend')){ drawing=false; last=null; return; }
+      if ((ev==='pointerup'||ev==='pointerleave'||ev==='touchend')){ drawing=false; last=null; saveBuf(); return; }
       if (!drawing || !last) return;
       draw(last[0], last[1], x, y, parseInt(width.value), color.value, true);
       last=[x,y];
     }, {passive:false});
   });
 
-  function draw(x0,y0,x1,y1,w,c,b){
-    ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1);
-    ctx.lineWidth=w; ctx.lineCap='round'; ctx.strokeStyle=c||'#000'; ctx.stroke();
-    if (b) socket.emit('draw', {session_id: sessionId, slide: idx, x0,y0,x1,y1,w,c});
-  }
+  // Socket: join
+  socket.emit('join_live', {session_id: sessionId, role: 'teacher'});
 
-  document.getElementById('clear').onclick = ()=> {
-    ctx.clearRect(0,0,cvs.width,cvs.height);
-    socket.emit('clear', {session_id: sessionId, slide: idx});
-  };
+  // Slides Navigation
+  document.getElementById('prev').onclick = () => { if (idx>0){ idx--; sendSlide();} };
+  document.getElementById('next').onclick = () => { if (idx<slides.length-1){ idx++; sendSlide();} };
+  document.querySelectorAll('.slide-link').forEach(a=>{
+    a.addEventListener('click', e=>{ e.preventDefault(); idx=parseInt(a.dataset.idx||'0'); sendSlide(); });
+  });
 
-  // Lösung show/hide
-  btnReveal.onclick = ()=> {
-    const nodeId = slides[idx]?.id;
-    socket.emit('reveal_solution', {session_id: sessionId, node_id: nodeId, reveal: true});
-  };
-  btnHide.onclick = ()=> {
-    const nodeId = slides[idx]?.id;
-    socket.emit('reveal_solution', {session_id: sessionId, node_id: nodeId, reveal: false});
-  };
+  // Reveal Lösung
+  btnReveal.onclick = ()=> socket.emit('reveal_solution', {session_id: sessionId, node_id: slides[idx]?.id, reveal: true});
+  btnHide.onclick   = ()=> socket.emit('reveal_solution', {session_id: sessionId, node_id: slides[idx]?.id, reveal: false});
 
-  // Session beenden (HTTP + Socket)
-  document.getElementById('end').onclick = async ()=>{
-    try {
-      await fetch(`/courses/${courseId}/live/end`, {method:'POST', headers:{'X-Requested-With':'fetch'}});
-    } catch (e) {}
-    socket.emit('end_session', {session_id: sessionId});
-  };
-
-  // Slide versenden: Server baut HTML (inkl. reveal-state)
+  // Serverseitig bauen lassen und Callback für eigene Ansicht nutzen
   function sendSlide(){
     exControls.style.display = (slides[idx]?.type === 'exercise') ? '' : 'none';
-    socket.emit('slide_change', {session_id: sessionId, index: idx});
+    socket.emit('slide_change', {session_id: sessionId, index: idx}, (resp)=>{
+      if (!resp) return;
+      idx = resp.index ?? idx;
+      slideEl.innerHTML = resp.html || '';
+      // Nach DOM-Update Canvas auf gesamte Fläche der Folie setzen
+      setTimeout(()=>{ resizeCanvasToWrap(); }, 0);
+    });
   }
 
-  // Empfang
   socket.on('slide_change', data => {
-    idx = data.index || 0;
-    slideEl.innerHTML = data.html || '';
+    // Schüler erhalten Broadcast; Lehrer baut lokal schon via Callback um
+    // Wir räumen nur das Overlay
+    if (data.index !== idx) return;
     ctx.clearRect(0,0,cvs.width,cvs.height);
-    exControls.style.display = (slides[idx]?.type === 'exercise') ? '' : 'none';
   });
-  socket.on('ended', () => { window.location = `/courses/${courseId}`; });
+  socket.on('draw', data => {
+    if (data.slide !== idx) return;
+    draw(data.x0, data.y0, data.x1, data.y1, data.w, data.c, false);
+  });
+  socket.on('clear', data => { if (data.slide===idx) clearOverlay(false); });
+  socket.on('ended', () => { window.location = `/courses/{{ course.id }}`; });
 
-  // initiale Folie anstoßen
+  // PDF Export aller Folien (mit html2canvas, inkl. Overlay)
+  async function captureSlideAsPNG(){
+    // temporarily hide selection outline
+    const el = document.getElementById('slide-wrap');
+    const canvas = await html2canvas(el, {backgroundColor: '#ffffff', scale: 2, useCORS: true});
+    return canvas.toDataURL('image/png');
+  }
+
+  async function exportAllSlides(){
+    const images = [];
+    const cur = idx;
+    for (let i=0; i<slides.length; i++){
+      await new Promise(res=>{
+        socket.emit('slide_change', {session_id: sessionId, index: i}, async (resp)=>{
+          slideEl.innerHTML = resp?.html || '';
+          setTimeout(async ()=>{
+            resizeCanvasToWrap();
+            // Warte mini Tick, bis Canvas/HTML steht
+            setTimeout(async ()=>{
+              images.push(await captureSlideAsPNG());
+              res();
+            }, 50);
+          }, 0);
+        });
+      });
+    }
+    // zurück zur aktuellen
+    if (cur !== idx){
+      socket.emit('slide_change', {session_id: sessionId, index: cur}, (resp)=> {
+        slideEl.innerHTML = resp?.html || '';
+        setTimeout(resizeCanvasToWrap, 0);
+      });
+    }
+    // an Server senden
+    const r = await fetch(`/courses/${courseId}/live/export`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({images})
+    });
+    const j = await r.json().catch(()=>({}));
+    return j?.pdf_url;
+  }
+
+  document.getElementById('clear').onclick = ()=> clearOverlay(true);
+
+  document.getElementById('end').onclick = async ()=>{
+    try{
+      const pdfUrl = await exportAllSlides();
+      await fetch(`/courses/${courseId}/live/end`, {method:'POST'});
+      if (pdfUrl) window.open(pdfUrl, '_blank');
+      window.location = `/courses/${courseId}`;
+    }catch(e){
+      await fetch(`/courses/${courseId}/live/end`, {method:'POST'});
+      window.location = `/courses/${courseId}`;
+    }
+  };
+
+  // initial
   sendSlide();
 })();
 </script>
