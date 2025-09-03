@@ -3,6 +3,7 @@ from io import BytesIO
 from datetime import datetime as dt
 from bs4 import BeautifulSoup
 from PIL import Image
+from sqlalchemy import func
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
@@ -179,9 +180,14 @@ def detail(course_id):
     )
 
     # Dateien (Downloads) für den Kurs
-    docs = Document.query.filter_by(subject_year_id=course.id) \
-        .order_by(Document.order_index.asc().nullsLast(), Document.uploaded_at.asc()) \
+    docs = (
+        Document.query.filter_by(subject_year_id=course.id)
+        .order_by(
+            func.coalesce(Document.order_index, 1_000_000).asc(),
+            Document.uploaded_at.asc(),
+        )
         .all()
+    )
 
     items, doc_paths = [], {}
     seq = 0  # Fallback-Sequenz, wenn order_index fehlt
@@ -378,13 +384,14 @@ def live_export(course_id):
     rel_pdf = f"{course.id}/exports/{filename}"
     doc = Document(
         id=gen_id(),
-        course_id=course.id,
+        subject_year_id=course.id,  # <- WICHTIG: nicht course_id, sondern subject_year_id
         owner_user_id=current_user.id,
         title=f"Export {dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
         path=rel_pdf,
         mime="application/pdf"
     )
-    db.session.add(doc); db.session.commit()
+    db.session.add(doc)
+    db.session.commit()
 
     return jsonify({"ok": True, "pdf_url": f"/courses/files/{rel_pdf}"}), 200
 
@@ -655,7 +662,7 @@ def toggle_release(course_id, node_id):
 
 # ---------- Live-Export (Canvas → PDF/PNG) ----------
 @csrf.exempt
-@bp.route("/<course_id>/live/export", methods=["POST"])
+@bp.route("/<course_id>/live/export", methods=["POST"], endpoint="live_export_pdf")
 @login_required
 def live_export(course_id):
     course = db.session.get(SubjectYear, course_id)

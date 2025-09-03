@@ -25,7 +25,7 @@ class Config:
 
 
     # Uploads (für Editor-Bilder & Exporte)
-    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
+    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str((BASE_DIR / "app" / "uploads").resolve()))
 
     # --- DB Reset-Schalter (.env) ---
     DB_RESET_ON_START = _env_bool("DB_RESET", False)          # "1"/"true" → Reset beim Start
