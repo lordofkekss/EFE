@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}Kurse{% endblock %}
+{% block content %}
+<h4 class="mb-3">Kurse</h4>
+
+{% if current_user.role in ['teacher', 'admin'] %}
+  <div class="mb-3">
+    <a class="btn btn-outline-primary" href="/courses/manage">Kurse verwalten / anlegen</a>
+  </div>
+{% endif %}
+
+{% if stars is not none %}
+  <div class="alert alert-info">Deine Sterne: <strong>{{ stars }}</strong></div>
+{% endif %}
+
+{% if courses %}
+  <div class="row g-3">
+    {% for c in courses %}
+      <div class="col-md-6">
+        <div class="card h-100">
+          <div class="card-body d-flex flex-column">
+            <h5 class="card-title">
+              {{ c.school_year }} – {{ c.id }}
+            </h5>
+            <div class="text-muted small mb-2">
+              {% set klass = classes.get(c.class_id) %}
+              {% if klass %}Klasse: {{ klass.name }}{% endif %}
+            </div>
+            <div class="mt-auto">
+              <a class="btn btn-primary" href="/courses/{{ c.id }}">Kurs öffnen</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="alert alert-info">
+    {% if current_user.role == 'student' %}
+      Für deine Klassen wurden noch keine Kurse angelegt. Bitte Lehrkraft informieren.
+    {% else %}
+      Noch keine Kurse vorhanden. Lege einen Kurs über „Kurse verwalten / anlegen“ an.
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}

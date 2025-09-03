@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% block title %}Kurse verwalten{% endblock %}
+{% block content %}
+<h4 class="mb-3">Kurse verwalten</h4>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Neuen Kurs anlegen</h5>
+        <form method="post" action="/courses/create">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label class="form-label">Klasse</label>
+            <select class="form-select" name="class_id" required>
+              {% for cl in classes %}
+                <option value="{{ cl.id }}">{{ cl.name }} ({{ cl.grade_level }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Fach</label>
+            <input class="form-control" name="subject_name" placeholder="z. B. Mathe" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Schuljahr</label>
+            <input class="form-control" name="school_year" value="{{ default_school_year }}">
+            <div class="form-text">Format: 2025/26 (leer lassen für Auto)</div>
+          </div>
+          <button class="btn btn-primary">Kurs erstellen</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Vorhandene Kurse</h5>
+        {% if courses %}
+          <ul class="list-group">
+            {% for c in courses %}
+              <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span>
+                  {{ c.school_year }} –
+                  {% if subjects.get(c.subject_id) %}{{ subjects[c.subject_id].name }}{% else %}Fach{% endif %}
+                  · Klasse: {{ c.class_id }}
+                </span>
+                <a class="btn btn-sm btn-outline-primary" href="/courses/{{ c.id }}">Öffnen</a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="text-muted">Noch keine Kurse angelegt.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

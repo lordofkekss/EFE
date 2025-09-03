@@ -3,7 +3,6 @@ from flask_wtf.csrf import generate_csrf
 import os
 from .config import Config
 from .extensions import db, migrate, login_manager, csrf, socketio
-from .cli import register_cli
 
 
 def create_app():
@@ -13,14 +12,13 @@ def create_app():
     # Extensions
     db.init_app(app)
     migrate.init_app(app, db)
-    register_cli(app)
     login_manager.init_app(app)
     login_manager.login_view = "auth.login"
     login_manager.login_message_category = "warning"
     csrf.init_app(app)
     socketio.init_app(app, cors_allowed_origins="*")
 
-    # Jinja: CSRF-Funktion überall verfügbar
+    # Jinja: CSRF in allen Templates
     @app.context_processor
     def inject_csrf_token():
         return dict(csrf_token=generate_csrf)
@@ -31,14 +29,16 @@ def create_app():
     from .teachers.routes import bp as teachers_bp
     from .rewards.routes import bp as rewards_bp
     from .live.routes import bp as live_bp
+    from .courses.routes import bp as courses_bp  # NEU
 
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(students_bp, url_prefix="/s")
     app.register_blueprint(teachers_bp, url_prefix="/t")
     app.register_blueprint(rewards_bp, url_prefix="/rewards")
     app.register_blueprint(live_bp, url_prefix="/live")
+    app.register_blueprint(courses_bp, url_prefix="/courses")  # NEU
 
-    # Navbar-Flag: Registrieren nur wenn sinnvoll
+    # Navbar-Flags: Registrierung sichtbar nur wenn sinnvoll
     from .models import User
     from flask_login import current_user
 

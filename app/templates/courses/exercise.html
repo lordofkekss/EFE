@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}Übung{% endblock %}
+{% block content %}
+<h4 class="mb-3">Übung: {{ node.title }}</h4>
+<form method="post" action="/courses/{{ course_id }}/exercise/{{ node.id }}/submit">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="mb-3">
+    <label class="form-label">Aufgabe</label>
+    <div class="p-2 border rounded bg-light">{{ ex.prompt_md }}</div>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Antwort</label>
+    <textarea class="form-control" name="answer" rows="3" required></textarea>
+  </div>
+  <button class="btn btn-primary">Abgeben</button>
+</form>
+{% endblock %}

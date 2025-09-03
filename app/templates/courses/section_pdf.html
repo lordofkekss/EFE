@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      @page { size: A4; margin: 18mm; }
+      body { font-family: Arial, sans-serif; font-size: 12pt; }
+      h1 { font-size: 18pt; margin: 0 0 10pt 0; }
+      h2 { font-size: 14pt; margin: 16pt 0 6pt 0; }
+      p { margin: 6pt 0; }
+      img, video { max-width: 100%; }
+    </style>
+  </head>
+  <body>
+    <h1>{{ node.title }}</h1>
+    <div>{{ node.body_html|safe }}</div>
+  </body>
+</html>
