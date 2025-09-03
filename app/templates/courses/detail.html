@@ -64,11 +64,13 @@
                       </form>
                     {% endif %}
                     {% elif it.kind == 'exercise' %}
-                      <span class="badge {{ 'bg-success' if it.id in completed_ids else 'bg-light text-dark' }}">
-                        {{ 'Erledigt' if it.id in completed_ids else 'Offen' }}
+                      <span class="badge {{ 'bg-success' if it.id in completed_ids else 'bg-light text-dark' }} me-2">
+                        {{ exercise_counts.get(it.id, 0) }}/{{ total_students }}
                       </span>
                       <a class="btn btn-sm btn-outline-primary" href="/courses/{{ course.id }}/exercise/{{ it.id }}">Öffnen</a>
                       {% if current_user.role in ['teacher','admin'] %}
+                        <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal"
+                                data-bs-target="#statsModal" data-node="{{ it.id }}">Ergebnisse</button>
                         <a class="btn btn-sm btn-outline-secondary" href="/courses/{{ course.id }}/exercise/{{ it.id }}/edit">Bearbeiten</a>
                         <form method="post" action="/courses/{{ course.id }}/content/{{ it.id }}/release" class="d-inline">
                           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -143,7 +145,84 @@
     </div>
   </div>
   {% endif %}
+  {% if current_user.role in ['teacher','admin'] %}
+<div class="card mt-3">
+  <div class="card-body">
+    <h5 class="mb-3">Downloads & Exporte</h5>
+    {% if export_docs and export_docs|length > 0 %}
+      <ul class="list-group">
+        {% for d in export_docs %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-file-earmark-pdf me-2"></i>{{ d.title or 'Export' }}</span>
+            <a class="btn btn-sm btn-outline-primary" href="/courses/files/{{ doc_paths[d.id] }}" target="_blank">Öffnen</a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="text-muted">Noch keine Exporte.</div>
+    {% endif %}
+  </div>
 </div>
+{% endif %}
+
+</div>
+<!-- Stats-Modal -->
+<div class="modal fade" id="statsModal" tabindex="-1" aria-labelledby="statsLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="statsLabel">Übungsergebnisse</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schließen"></button>
+      </div>
+      <div class="modal-body">
+        <div id="statsBody" class="table-responsive small">
+          <div class="text-muted">Lade …</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const modal = document.getElementById('statsModal');
+  modal?.addEventListener('show.bs.modal', async (ev)=>{
+    const btn = ev.relatedTarget;
+    const nodeId = btn?.getAttribute('data-node');
+    if(!nodeId) return;
+    const box = document.getElementById('statsBody');
+    box.innerHTML = '<div class="text-muted">Lade …</div>';
+    try{
+      const r = await fetch(`/courses/{{ course.id }}/exercise/${nodeId}/stats`, {cache:'no-store'});
+      const j = await r.json();
+      let rows = (j.rows || []).map(r => `
+        <tr>
+          <td>${r.username}</td>
+          <td>${r.status}</td>
+          <td class="text-end">${r.score ?? '-'}</td>
+          <td class="text-end">${r.total_points ?? '-'}</td>
+          <td class="text-end">${r.percent ?? '-' }%</td>
+          <td>${r.passed === null ? '-' : (r.passed ? '<span class="badge bg-success">bestanden</span>' : '<span class="badge bg-danger">nicht</span>')}</td>
+          <td class="text-end">${r.attempts ?? 1}</td>
+        </tr>`).join('');
+      if(!rows) rows = '<tr><td colspan="7" class="text-muted">Keine Abgaben.</td></tr>';
+      box.innerHTML = `
+        <table class="table table-sm">
+          <thead><tr>
+            <th>Schüler</th><th>Status</th><th class="text-end">Punkte</th>
+            <th class="text-end">Max</th><th class="text-end">%</th><th>Live</th><th class="text-end">Versuche</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="small text-muted">Abgeschlossen: ${j.completed}/${j.total_students}</div>
+      `;
+    }catch(e){
+      box.innerHTML = '<div class="text-danger">Fehler beim Laden.</div>';
+    }
+  });
+})();
+</script>
+
 
 {% if current_user.role == 'student' %}
 <script>

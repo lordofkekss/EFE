@@ -84,7 +84,32 @@ class Exercise(db.Model):
     answer_schema = db.Column(JSONType)
     difficulty = db.Column(db.Integer)
     tags = db.Column(JSONType)
+    is_live_only = db.Column(db.Boolean, default=False)  # Live: statt Punkten nur bestanden/nicht bestanden
 
+    def total_points(self) -> int:
+        from .models import ExerciseItem  # lazy import
+        items = ExerciseItem.query.filter_by(exercise_id=self.id).all()
+        return sum((it.points or 0) for it in items if it.type in ("text", "mc"))
+
+# --- ExerciseItem ---
+class ExerciseItem(db.Model):
+    __tablename__ = "exercise_items"
+    id = db.Column(db.String, primary_key=True, default=gen_id)
+    exercise_id = db.Column(db.String, db.ForeignKey("exercises.id"), nullable=False)
+
+    # "text" | "mc" | "content"
+    type = db.Column(db.String, nullable=False)
+
+    # Gemeinsame Felder
+    prompt_html = db.Column(db.Text)  # Text der Aufgabe oder Content-Block
+
+    # MC-spezifisch: Optionen + richtige Auswahl(en)
+    options = db.Column(JSONType)     # [{"id":"A","text":"..."}, ...]  (3-8 Einträge)
+    correct = db.Column(JSONType)     # z.B. ["A","C"] oder bei "text": {"equals":"..."} (optional)
+
+    # Bewertung
+    points = db.Column(db.Integer, default=0)  # bei content=0
+    order_index = db.Column(db.Integer, default=0)
 
 # --- Zugehörigkeit / Abgaben ---
 class Enrollment(db.Model):

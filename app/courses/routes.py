@@ -1,4 +1,4 @@
-import os, re, uuid, base64, random
+import os, re, uuid, base64, random, io
 from io import BytesIO
 from datetime import datetime as dt
 from bs4 import BeautifulSoup
@@ -18,7 +18,7 @@ from . import bp
 from ..extensions import db, csrf
 from ..models import (
     Subject, SubjectYear, Class, Enrollment,
-    ContentNode, Exercise, Submission, Document, StarTransaction, Document, LiveSession, gen_id
+    ContentNode, Exercise, ExerciseItem, Submission, Document, StarTransaction, Document, LiveSession, gen_id
 )
 
 ALLOWED_DOC_EXTS = {"pdf","png","jpg","jpeg","doc","docx","ppt","pptx","xls","xlsx","txt"}
@@ -161,82 +161,66 @@ def manage():
                            subject_map=subject_map,
                            current_year=_current_school_year())
 
-# ---------- Kurs-Details ----------
 @bp.route("/<course_id>")
 @login_required
 def detail(course_id):
     import os
     course = db.session.get(SubjectYear, course_id)
-    if not course:
-        abort(404)
+    if not course: abort(404)
     if current_user.role != "admin":
         if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id).first():
             abort(403)
 
-    # Nodes (Abschnitte/Übungen) – Helper filtert unreleased für Schüler raus
-    nodes = _sorted_nodes_for_course(
-        course.id,
-        include_unreleased_for_teacher=(current_user.role != "student")
-    )
+    nodes = _sorted_nodes_for_course(course.id, include_unreleased_for_teacher=(current_user.role != "student"))
 
-    # Dateien (Downloads) für den Kurs
-    docs = (
-        Document.query.filter_by(subject_year_id=course.id)
-        .order_by(
-            func.coalesce(Document.order_index, 1_000_000).asc(),
-            Document.uploaded_at.asc(),
-        )
-        .all()
-    )
+    # Dateien (inkl. Exporte)
+    docs = (Document.query.filter_by(subject_year_id=course.id)
+            .order_by(func.coalesce(Document.order_index, 1_000_000).asc(),
+                      func.coalesce(Document.uploaded_at, dt(2000,1,1)).asc())
+            .all())
+    doc_paths = {d.id: (d.path or "").replace("\\", "/") for d in docs}
+    export_docs = [d for d in docs if "/exports/" in (d.path or "")]
 
-    items, doc_paths = [], {}
-    seq = 0  # Fallback-Sequenz, wenn order_index fehlt
-
-    # Inhalte (Abschnitte/Übungen) einsortieren
+    # Items bauen
+    items = []
     for n in nodes:
         kind = "exercise" if n.type == "exercise" else "section"
-        oi = n.order_index if n.order_index is not None else (1_000_000 + seq)
-        seq += 1
+        oi = n.order_index if n.order_index is not None else 1_000_000
         items.append({
-            "id": n.id,
-            "kind": kind,
-            "title": n.title or "(Ohne Titel)",
-            "order_index": oi,
-            "released": bool(getattr(n, "released", True)),
+            "id": n.id, "kind": kind, "title": n.title or "(Ohne Titel)",
+            "order_index": oi, "released": bool(getattr(n, "released", True)),
         })
-
-    # Dateien einsortieren (mit Pfad)
-    for d in docs:
-        path = (d.path or "").replace("\\", "/")
-        doc_paths[d.id] = path
-        oi = d.order_index if getattr(d, "order_index", None) is not None else (1_000_000 + seq)
-        seq += 1
-        items.append({
-            "id": d.id,
-            "kind": "file",
-            "title": (d.title or os.path.basename(path) or "Datei"),
-            "order_index": oi,
-            "released": bool(getattr(d, "released", True)),
-        })
-
-    # stabile Sortierung: erst order_index, dann Titel
     items.sort(key=lambda it: (it.get("order_index", 1_000_000), (it.get("title") or "").lower()))
 
-    # Erledigte Übungen (für Schüler/ Admin-Anzeige)
+    # Abschlusszählung: wie viele Schüler in der Klasse haben je Übung eine Abgabe ≠ draft
+    total_students = Enrollment.query.filter_by(class_id=course.class_id, role_in_class="student").count()
+    ex_ids = [it["id"] for it in items if it["kind"] == "exercise"]
+    counts = {}
+    if ex_ids:
+        rows = (db.session.query(Submission.assignment_id, func.count(Submission.id))
+                .filter(Submission.assignment_id.in_(ex_ids))
+                .filter(Submission.status.in_(["submitted", "evaluated"]))
+                .group_by(Submission.assignment_id)
+                .all())
+        counts = {aid: cnt for (aid, cnt) in rows}
+
+    # Erledigt-Set für aktuellen User (Schüler/Admin)
     completed_ids = set()
     if current_user.is_authenticated and current_user.role in ("student", "admin"):
         subs = Submission.query.filter_by(student_id=current_user.id).all()
-        for s in subs:
-            if getattr(s, "assignment_id", None):
-                completed_ids.add(s.assignment_id)
+        completed_ids = {s.assignment_id for s in subs}
 
     return render_template(
         "courses/detail.html",
         course=course,
         items=items,
         doc_paths=doc_paths,
+        export_docs=export_docs,
+        total_students=total_students,
+        exercise_counts=counts,
         completed_ids=completed_ids,
     )
+
 
 
 # ---------- JSON: Live-Status (für Schüler-Button + initialer Slide) ----------
@@ -267,7 +251,6 @@ def live(course_id):
 
     sess = LiveSession.query.filter_by(course_id=course.id, active=True).first()
     if not sess:
-        from datetime import datetime as dt
         from .routes import _gen_code  # falls bereits in dieser Datei vorhanden
         sess = LiveSession(id=gen_id(), course_id=course.id, host_user_id=current_user.id,
                            join_code=_gen_code(), started_at=dt.utcnow(), active=True, current_slide=0, revealed_ids=[])
@@ -522,48 +505,73 @@ def section_pdf(course_id, node_id):
 @login_required
 def exercise_view(course_id, node_id):
     node = db.session.get(ContentNode, node_id)
-    if not node or node.subject_year_id != course_id or node.type != "exercise":
-        abort(404)
-
-    # Zugriffsrecht: eingeschrieben
+    if not node or node.subject_year_id != course_id or node.type != "exercise": abort(404)
     course = db.session.get(SubjectYear, course_id)
     if current_user.role != "admin":
         if not Enrollment.query.filter_by(class_id=course.class_id, user_id=current_user.id).first():
             abort(403)
 
     ex = Exercise.query.filter_by(content_node_id=node.id).first()
-    if not ex:
-        # leere Übung
-        ex = Exercise(id=gen_id(), content_node_id=node.id, kind="short_answer", prompt_md="(Noch keine Aufgabe)")
-        db.session.add(ex); db.session.commit()
+    items = (ExerciseItem.query.filter_by(exercise_id=ex.id)
+             .order_by(ExerciseItem.order_index.asc(), ExerciseItem.id.asc()).all())
 
-    # Vorhandene Abgabe?
     sub = Submission.query.filter_by(student_id=current_user.id, assignment_id=node.id).first()
 
     if request.method == "POST":
-        # Schülerantwort speichern
-        if current_user.role not in ("student","admin"):
-            abort(403)
-        answer_text = (request.form.get("answer_text") or "").strip()
+        if current_user.role not in ("student","admin"): abort(403)
+        answers = {}
+        score = 0
+        total = ex.total_points()
+
+        for it in items:
+            if it.type == "content":
+                continue
+            if it.type == "text":
+                key = f"text_{it.id}"
+                ans = (request.form.get(key) or "").strip()
+                answers[it.id] = {"type": "text", "text": ans}
+                # auto-gleichheit, optional
+                if it.correct and isinstance(it.correct, dict) and "equals" in it.correct:
+                    if ans.strip().lower() == (it.correct["equals"] or "").strip().lower():
+                        score += (it.points or 0)
+            elif it.type == "mc":
+                key = f"mc_{it.id}[]"
+                vals = request.form.getlist(key)
+                selected = sorted([v.upper() for v in vals])
+                answers[it.id] = {"type": "mc", "choices": selected}
+                correct = sorted((it.correct or []))
+                if selected == correct:
+                    score += (it.points or 0)
+
         if not sub:
             sub = Submission(id=gen_id(), assignment_id=node.id, student_id=current_user.id,
-                             answer_json={"text": answer_text}, status="submitted", attempts_count=1)
+                             answer_json=answers, status="submitted", attempts_count=1, score=score)
             db.session.add(sub)
         else:
-            sub.answer_json = {"text": answer_text}
-            sub.status = "submitted"
+            sub.answer_json = answers
+            sub.score = score
             sub.attempts_count = (sub.attempts_count or 0) + 1
+            sub.status = "submitted"
         db.session.commit()
 
-        # einfache Sterne-Gutschrift (einmalig pro Übung)
+        # Sterne für Abgabe (einmalig)
         already = StarTransaction.query.filter_by(user_id=current_user.id, assignment_id=node.id, reason="submission").first()
         if not already:
-            st = StarTransaction(id=gen_id(), user_id=current_user.id, assignment_id=node.id, amount=1, reason="submission", created_by=None)
+            st = StarTransaction(id=gen_id(), user_id=current_user.id, assignment_id=node.id, amount=1, reason="submission")
             db.session.add(st); db.session.commit()
-        flash("Antwort gespeichert. Du bekommst einen Stern für die Abgabe.", "success")
+
+        flash("Abgabe gespeichert.", "success")
         return redirect(url_for("courses.detail", course_id=course_id))
 
-    return render_template("courses/exercise.html", course=course, node=node, ex=ex, sub=sub)
+    # Anzeige
+    total_points = ex.total_points()
+    percent = None
+    if sub and total_points > 0 and sub.score is not None:
+        percent = round((sub.score / total_points) * 100, 1)
+
+    return render_template("courses/exercise.html",
+                           course=course, node=node, ex=ex, items=items,
+                           sub=sub, total_points=total_points, percent=percent)
 
 
 @bp.route("/<course_id>/exercise/<node_id>/submit", methods=["POST"])
@@ -579,17 +587,29 @@ def exercise_submit(course_id, node_id):
     flash("Abgabe gespeichert. +1 Stern", "success")
     return redirect(url_for("courses.detail", course_id=course_id))
 
-@bp.route("/<course_id>/exercise/<node_id>/edit")
+@bp.route("/<course_id>/exercise/<node_id>/edit", methods=["GET", "POST"])
 @login_required
 def exercise_edit(course_id, node_id):
-    n = db.session.get(ContentNode, node_id)
-    if not n or n.subject_year_id != course_id or n.type != "exercise": abort(404)
+    node = db.session.get(ContentNode, node_id)
+    if not node or node.subject_year_id != course_id or node.type != "exercise": abort(404)
     if current_user.role not in ("teacher","admin"): abort(403)
-    ex = Exercise.query.filter_by(content_node_id=n.id).first()
+
+    ex = Exercise.query.filter_by(content_node_id=node.id).first()
     if not ex:
-        ex = Exercise(id=gen_id(), content_node_id=n.id, kind="rich")
+        ex = Exercise(id=gen_id(), content_node_id=node.id, kind="rich", is_live_only=False)
         db.session.add(ex); db.session.commit()
-    return render_template("courses/exercise_edit.html", node=n, ex=ex, course_id=course_id)
+
+    if request.method == "POST":
+        # Meta speichern
+        ex.is_live_only = (request.form.get("is_live_only") == "1")
+        db.session.commit()
+        flash("Einstellungen gespeichert.", "success")
+        return redirect(url_for("courses.exercise_edit", course_id=course_id, node_id=node_id))
+
+    items = (ExerciseItem.query.filter_by(exercise_id=ex.id)
+             .order_by(ExerciseItem.order_index.asc(), ExerciseItem.id.asc()).all())
+    return render_template("courses/exercise_edit.html", node=node, ex=ex, items=items)
+
 
 @bp.route("/<course_id>/exercise/<node_id>/save", methods=["POST"])
 @login_required
@@ -606,6 +626,147 @@ def exercise_save(course_id, node_id):
     db.session.commit()
     flash("Übung gespeichert.", "success")
     return redirect(url_for("courses.detail", course_id=course_id))
+
+@bp.route("/<course_id>/exercise/<node_id>/stats")
+@login_required
+def exercise_stats(course_id, node_id):
+    course = db.session.get(SubjectYear, course_id)
+    if not course: abort(404)
+    # nur Lehrer/Admin
+    if current_user.role not in ("teacher", "admin"): abort(403)
+
+    # Übung existiert?
+    node = db.session.get(ContentNode, node_id)
+    if not node or node.subject_year_id != course.id or node.type != "exercise": abort(404)
+    ex = Exercise.query.filter_by(content_node_id=node.id).first()
+    total_points = ex.total_points() if ex else 0
+
+    # Schülerliste
+    student_ids = [e.user_id for e in Enrollment.query.filter_by(class_id=course.class_id, role_in_class="student").all()]
+    users = {u.id: u for u in User.query.filter(User.id.in_(student_ids)).all()}
+
+    # Submissions
+    subs = Submission.query.filter(Submission.assignment_id == node.id,
+                                   Submission.student_id.in_(student_ids)).all()
+    out = []
+    for s in subs:
+        user = users.get(s.student_id)
+        percent = None
+        passed = None
+        if ex and ex.is_live_only:
+            # live → bestanden anhand Threshold
+            if s.score is not None and total_points > 0:
+                percent = s.score / total_points
+                passed = percent >= Config.EXERCISE_PASS_THRESHOLD
+        else:
+            if s.score is not None and total_points > 0:
+                percent = s.score / total_points
+        out.append({
+            "user_id": s.student_id,
+            "username": user.username if user else "(?)",
+            "score": s.score,
+            "total_points": total_points,
+            "percent": round(percent * 100, 1) if percent is not None else None,
+            "passed": passed,
+            "status": s.status,
+            "attempts": s.attempts_count,
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+        })
+
+    return jsonify({
+        "total_students": len(student_ids),
+        "completed": len(subs),
+        "rows": out,
+    })
+
+@bp.route("/<course_id>/exercise/<node_id>/item/add", methods=["POST"])
+@login_required
+def exercise_item_add(course_id, node_id):
+    node = db.session.get(ContentNode, node_id)
+    if not node or node.subject_year_id != course_id or node.type != "exercise": abort(404)
+    if current_user.role not in ("teacher","admin"): abort(403)
+    ex = Exercise.query.filter_by(content_node_id=node.id).first()
+    if not ex: abort(400)
+
+    itype = request.form.get("type")
+    if itype not in ("text","mc","content"): abort(400)
+    title = (request.form.get("prompt_html") or "").strip()
+    points = int(request.form.get("points") or 0)
+
+    # MC-Optionen und Korrekte
+    options = None
+    correct = None
+    if itype == "mc":
+        # Erwartet Felder options[] und correct[]
+        opts = request.form.getlist("options[]")
+        opts = [o.strip() for o in opts if o.strip()]
+        if not (3 <= len(opts) <= 8):
+            flash("MC: 3-8 Antwortmöglichkeiten erforderlich.", "warning")
+        options = [{"id": chr(65+i), "text": t} for i, t in enumerate(opts)]
+        correct_ids = set(request.form.getlist("correct[]"))
+        # Falls per Text geliefert: map auf IDs
+        corrected = []
+        for cid in correct_ids:
+            if len(cid) == 1 and cid.isalpha():
+                corrected.append(cid.upper())
+        correct = corrected
+
+    if itype == "text":
+        sol = (request.form.get("correct_text") or "").strip()
+        correct = {"equals": sol} if sol else None
+
+    idx = int((db.session.query(func.coalesce(func.max(ExerciseItem.order_index), 0))
+               .filter_by(exercise_id=ex.id).scalar() or 0)) + 10
+
+    item = ExerciseItem(
+        id=gen_id(), exercise_id=ex.id, type=itype,
+        prompt_html=title, options=options, correct=correct,
+        points=(0 if itype == "content" else points),
+        order_index=idx
+    )
+    db.session.add(item); db.session.commit()
+    flash("Aufgabe/Block hinzugefügt.", "success")
+    return redirect(url_for("courses.exercise_edit", course_id=course_id, node_id=node_id))
+
+@bp.route("/<course_id>/exercise/<node_id>/item/<item_id>/update", methods=["POST"])
+@login_required
+def exercise_item_update(course_id, node_id, item_id):
+    item = db.session.get(ExerciseItem, item_id)
+    if not item: abort(404)
+    node = db.session.get(ContentNode, node_id)
+    if not node or node.subject_year_id != course_id: abort(404)
+    if current_user.role not in ("teacher","admin"): abort(403)
+
+    item.prompt_html = request.form.get("prompt_html", item.prompt_html)
+    item.points = int(request.form.get("points") or item.points or 0)
+    item.order_index = int(request.form.get("order_index") or item.order_index or 0)
+
+    if item.type == "text":
+        sol = (request.form.get("correct_text") or "").strip()
+        item.correct = {"equals": sol} if sol else None
+    elif item.type == "mc":
+        opts = request.form.getlist("options[]")
+        opts = [o.strip() for o in opts if o.strip()]
+        item.options = [{"id": chr(65+i), "text": t} for i, t in enumerate(opts)]
+        correct_ids = set(request.form.getlist("correct[]"))
+        item.correct = [c.upper() for c in correct_ids if len(c)==1 and c.isalpha()]
+
+    db.session.commit()
+    flash("Aufgabe aktualisiert.", "success")
+    return redirect(url_for("courses.exercise_edit", course_id=course_id, node_id=node_id))
+
+@bp.route("/<course_id>/exercise/<node_id>/item/<item_id>/delete", methods=["POST"])
+@login_required
+def exercise_item_delete(course_id, node_id, item_id):
+    item = db.session.get(ExerciseItem, item_id)
+    if not item: abort(404)
+    node = db.session.get(ContentNode, node_id)
+    if not node or node.subject_year_id != course_id: abort(404)
+    if current_user.role not in ("teacher","admin"): abort(403)
+    db.session.delete(item); db.session.commit()
+    flash("Aufgabe gelöscht.", "info")
+    return redirect(url_for("courses.exercise_edit", course_id=course_id, node_id=node_id))
+
 
 # ---------- Dateien & Assets SERVEN (fix für Bilder aus dem Editor) ----------
 @bp.route("/files/<path:relpath>")

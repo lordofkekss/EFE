@@ -14,6 +14,9 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
 
 class Config:
+    #Übung Schwellwert für bestanden
+    EXERCISE_PASS_THRESHOLD = float(os.getenv("EXERCISE_PASS_THRESHOLD", "0.9"))
+    #DB
     SECRET_KEY = os.getenv("SECRET_KEY", "dev")
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", DEFAULT_DB)
     SQLALCHEMY_TRACK_MODIFICATIONS = False

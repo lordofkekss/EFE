@@ -3,33 +3,59 @@
 {% block content %}
 <h4 class="mb-3">Übung: {{ node.title }}</h4>
 
-<div class="card mb-3">
-  <div class="card-body">
-    <div class="mb-2">
-      {{ (ex.prompt_html or ex.prompt_md) | safe }}
-    </div>
-    {% if current_user.role == 'student' %}
-      <form method="post">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label class="form-label">Deine Antwort</label>
-        <textarea class="form-control" name="answer_text" rows="5">{{ (sub.answer_json.text if sub and sub.answer_json) or '' }}</textarea>
-        <div class="mt-2 d-flex gap-2">
-          <button class="btn btn-primary">Abgeben</button>
-          <a class="btn btn-outline-secondary" href="/courses/{{ course.id }}">Zurück</a>
-        </div>
-      </form>
-    {% else %}
-      <div class="alert alert-info mb-0">Nur Schüler können eine Antwort eingeben.</div>
-    {% endif %}
-  </div>
-</div>
+{% if ex.is_live_only %}
+<div class="alert alert-info">Diese Übung ist als <strong>Live</strong> markiert. Bewertung erfolgt als <em>bestanden/nicht</em>.</div>
+{% endif %}
 
-{% if ex.solution_html %}
-<div class="card">
-  <div class="card-body">
-    <div class="alert alert-success py-2 mb-2"><strong>Lösung (sichtbar, wenn im Live-Modus freigegeben):</strong></div>
-    <div class="ex-solution">{{ ex.solution_html | safe }}</div>
+<form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% for it in items %}
+    {% if it.type == 'content' %}
+      <div class="card mb-3"><div class="card-body">
+        {{ it.prompt_html | safe }}
+      </div></div>
+
+    {% elif it.type == 'text' %}
+      <div class="card mb-3"><div class="card-body">
+        <div class="d-flex justify-content-between">
+          <strong>Aufgabe {{ loop.index }}</strong>
+          {% if it.points %}<span class="badge bg-light text-dark">{{ it.points }} P</span>{% endif %}
+        </div>
+        <div class="mt-2">{{ it.prompt_html | safe }}</div>
+        <textarea class="form-control mt-2" name="text_{{ it.id }}" rows="4">{{ (sub.answer_json[it.id].text if sub and sub.answer_json and it.id in sub.answer_json) or '' }}</textarea>
+      </div></div>
+
+    {% elif it.type == 'mc' %}
+      <div class="card mb-3"><div class="card-body">
+        <div class="d-flex justify-content-between">
+          <strong>Aufgabe {{ loop.index }}</strong>
+          {% if it.points %}<span class="badge bg-light text-dark">{{ it.points }} P</span>{% endif %}
+        </div>
+        <div class="mt-2">{{ it.prompt_html | safe }}</div>
+        <div class="mt-2">
+          {% set prev = (sub.answer_json[it.id].choices if sub and sub.answer_json and it.id in sub.answer_json) or [] %}
+          {% for o in it.options or [] %}
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="mc_{{ it.id }}[]" value="{{ o.id }}" id="opt_{{ it.id }}_{{ loop.index }}"
+                     {% if o.id in prev %}checked{% endif %}>
+              <label class="form-check-label" for="opt_{{ it.id }}_{{ loop.index }}">{{ o.id }}) {{ o.text }}</label>
+            </div>
+          {% endfor %}
+        </div>
+      </div></div>
+    {% endif %}
+  {% endfor %}
+
+  <div class="d-flex gap-2">
+    <button class="btn btn-primary">Abgeben</button>
+    <a class="btn btn-outline-secondary" href="/courses/{{ course.id }}">Zurück</a>
   </div>
-</div>
+</form>
+
+{% if sub and total_points > 0 %}
+  <div class="alert alert-secondary mt-3">
+    Punktestand: <strong>{{ sub.score or 0 }}</strong> / {{ total_points }}
+    {% if percent is not none %} ({{ percent }} %){% endif %}
+  </div>
 {% endif %}
 {% endblock %}

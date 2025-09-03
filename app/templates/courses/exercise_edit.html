@@ -3,22 +3,131 @@
 {% block content %}
 <h4 class="mb-3">Übung: {{ node.title }}</h4>
 
-<form method="post" action="/courses/{{ course_id }}/exercise/{{ node.id }}/save">
+<form method="post" class="mb-3">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <div class="row g-3">
-    <div class="col-12">
-      <label class="form-label">Aufgabe</label>
-      <textarea class="form-control" name="prompt_html" rows="8">{{ ex.prompt_html or ex.prompt_md }}</textarea>
-      <div class="form-text">Rich-HTML erlaubt (Bilder/Videos möglich, wie beim Abschnitt-Editor).</div>
-    </div>
-    <div class="col-12">
-      <label class="form-label">Lösung</label>
-      <textarea class="form-control" name="solution_html" rows="8">{{ ex.solution_html or '' }}</textarea>
-    </div>
-    <div class="col-12 d-flex gap-2">
-      <button class="btn btn-primary">Speichern</button>
-      <a class="btn btn-outline-secondary" href="/courses/{{ course_id }}">Zurück</a>
+  <div class="form-check form-switch">
+    <input class="form-check-input" type="checkbox" id="is_live_only" name="is_live_only" value="1" {% if ex.is_live_only %}checked{% endif %}>
+    <label class="form-check-label" for="is_live_only">Live-Übung (nur bestanden/nicht)</label>
+  </div>
+  <button class="btn btn-primary mt-2">Speichern</button>
+  <a class="btn btn-outline-secondary mt-2" href="/courses/{{ node.subject_year_id }}">Zurück</a>
+</form>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-body">
+        <h5>Aufgaben / Blöcke</h5>
+        {% if items %}
+          <ol class="list-group list-group-numbered">
+            {% for it in items %}
+              <li class="list-group-item">
+                <div class="d-flex justify-content-between align-items-center">
+                  <div>
+                    <span class="badge {{ 'bg-info text-dark' if it.type=='mc' else ('bg-secondary' if it.type=='content' else 'bg-primary') }}">
+                      {{ it.type }}
+                    </span>
+                    <span class="ms-2">{{ it.prompt_html|safe }}</span>
+                    {% if it.points %}<span class="badge bg-light text-dark ms-2">{{ it.points }} P</span>{% endif %}
+                  </div>
+                  <form method="post" action="/courses/{{ node.subject_year_id }}/exercise/{{ node.id }}/item/{{ it.id }}/delete" onsubmit="return confirm('Löschen?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-sm btn-outline-danger">Löschen</button>
+                  </form>
+                </div>
+                <form class="mt-2" method="post" action="/courses/{{ node.subject_year_id }}/exercise/{{ node.id }}/item/{{ it.id }}/update">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <div class="mb-2">
+                    <label class="form-label">Order</label>
+                    <input class="form-control form-control-sm" name="order_index" value="{{ it.order_index }}">
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label">Text/HTML</label>
+                    <textarea class="form-control" name="prompt_html" rows="3">{{ it.prompt_html }}</textarea>
+                  </div>
+
+                  {% if it.type=='text' %}
+                    <div class="mb-2">
+                      <label class="form-label">Erwartete Antwort (optional, für Auto-Bewertung)</label>
+                      <input class="form-control" name="correct_text" value="{{ it.correct.equals if it.correct }}">
+                    </div>
+                    <div class="mb-2"><label class="form-label">Punkte</label><input class="form-control" name="points" value="{{ it.points }}"></div>
+                  {% elif it.type=='mc' %}
+                    <div class="mb-2">
+                      <label class="form-label">Antwortmöglichkeiten (eine pro Zeile)</label>
+                      <textarea class="form-control" name="options[]"
+                        rows="4">{% for o in it.options or [] %}{{ o.text }}{% if not loop.last %}\n{% endif %}{% endfor %}</textarea>
+                      <div class="form-text">Max. 8, min. 3</div>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label">Richtige (Buchstaben, z. B. A,C)</label>
+                      <input class="form-control" name="correct[]" value="{{ (it.correct|join(',')) if it.correct }}">
+                    </div>
+                    <div class="mb-2"><label class="form-label">Punkte</label><input class="form-control" name="points" value="{{ it.points }}"></div>
+                  {% endif %}
+
+                  <button class="btn btn-sm btn-primary">Aktualisieren</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <div class="text-muted">Noch keine Aufgaben/Blöcke.</div>
+        {% endif %}
+      </div>
     </div>
   </div>
-</form>
+
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-body">
+        <h5>Neu hinzufügen</h5>
+        <form method="post" action="/courses/{{ node.subject_year_id }}/exercise/{{ node.id }}/item/add">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-2">
+            <label class="form-label">Typ</label>
+            <select class="form-select" name="type" id="addType">
+              <option value="text">Textantwort</option>
+              <option value="mc">Multiple Choice</option>
+              <option value="content">Content-Block (ohne Punkte)</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Text/HTML</label>
+            <textarea class="form-control" name="prompt_html" rows="4"></textarea>
+          </div>
+          <div id="mcFields" class="mb-2 d-none">
+            <label class="form-label">Antwortmöglichkeiten (eine pro Zeile)</label>
+            <textarea class="form-control" name="options[]" rows="4" placeholder="Option 1&#10;Option 2&#10;Option 3"></textarea>
+            <label class="form-label mt-2">Richtige (Buchstaben, z. B. A,C)</label>
+            <input class="form-control" name="correct[]" placeholder="A">
+          </div>
+          <div id="textFields" class="mb-2">
+            <label class="form-label">Erwartete Antwort (optional)</label>
+            <input class="form-control" name="correct_text" placeholder="exakte Antwort für Auto-Bewertung">
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Punkte</label>
+            <input class="form-control" name="points" value="1">
+          </div>
+          <button class="btn btn-primary">Hinzufügen</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const sel = document.getElementById('addType');
+  const mc  = document.getElementById('mcFields');
+  const tx  = document.getElementById('textFields');
+  function flip(){
+    const v = sel.value;
+    mc.classList.toggle('d-none', v!=='mc');
+    tx.classList.toggle('d-none', v!=='text');
+  }
+  sel.addEventListener('change', flip); flip();
+})();
+</script>
 {% endblock %}
